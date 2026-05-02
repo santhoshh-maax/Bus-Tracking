@@ -1,0 +1,30 @@
+{
+  "project_info": {
+    "project_number": "651200089794",
+    "firebase_url": "https://bus-tracking-eae81-default-rtdb.asia-southeast1.firebasedatabase.app",
+    "project_id": "bus-tracking-eae81",
+    "storage_bucket": "bus-tracking-eae81.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:651200089794:android:f66fa587906721e895b55b",
+        "android_client_info": {
+          "package_name": "com.example.bus_tracking"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBJeYthKivtakn57vclFj8_PsBkRfMZbZs"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
