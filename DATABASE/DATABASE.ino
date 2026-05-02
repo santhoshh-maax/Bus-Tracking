@@ -130,5 +130,5 @@ void loop() {
   sendAT("AT+HTTPTERM");
 
   Serial.println("-------------------------");
-  delay(10000);
+  delay(5000);
 }
