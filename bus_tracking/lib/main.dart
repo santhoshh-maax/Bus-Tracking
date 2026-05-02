@@ -27,6 +27,7 @@ class MapScreen extends StatefulWidget {
 
 class _MapScreenState extends State<MapScreen> {
   final DatabaseReference dbRef = FirebaseDatabase.instance.ref("gps");
+  StreamSubscription? gpsSub;
 
   final MapController mapController = MapController();
   final Distance distanceCalculator = Distance();
@@ -38,24 +39,43 @@ class _MapScreenState extends State<MapScreen> {
 
   bool isConnected = false;
   String logText = "Waiting for data...";
-
+  String busStatus = "STOPPED";
+  bool isTracking = false;
+  List<LatLng> recordedRoute = [];
   Timer? animationTimer;
   double t = 0.0;
   double busAngle = 0.0;
+  double? lastLatReceived;
+  double? lastLonReceived;
 
   // 🔥 NEW FEATURES
   double speed = 0.0;
   double totalDistance = 0.0;
   DateTime? lastUpdateTime;
+  DateTime? lastFirebaseUpdate;
 
   @override
   void initState() {
     super.initState();
 
     // ✅ Always get latest Firebase value
-    dbRef.limitToLast(1).onValue.listen((event) {
-      setState(() {
-        isConnected = true;
+    gpsSub = dbRef.limitToLast(1).onValue.listen((event) {
+     ;
+
+         Timer.periodic(Duration(seconds: 7), (timer) {
+        if (lastFirebaseUpdate == null) return;
+
+        final diff = DateTime.now().difference(lastFirebaseUpdate!).inSeconds;
+
+        if (diff > 15) {
+          setState(() {
+            isConnected = false;
+          });
+        } else {
+          setState(() {
+            isConnected = true;
+          });
+        }
       });
 
       if (event.snapshot.value == null) {
@@ -74,6 +94,26 @@ class _MapScreenState extends State<MapScreen> {
       double lat = (lastEntry["lat"] as num).toDouble();
       double lon = (lastEntry["lon"] as num).toDouble();
 
+      bool isNewData = false;
+
+      if (lastLatReceived == null || lastLonReceived == null) {
+        isNewData = true;
+      } else {
+        if ((lat - lastLatReceived!).abs() > 0.00001 ||
+            (lon - lastLonReceived!).abs() > 0.00001) {
+          isNewData = true;
+        }
+      }
+      if (isNewData) {
+        lastFirebaseUpdate = DateTime.now();
+        lastLatReceived = lat;
+        lastLonReceived = lon;
+
+        setState(() {
+          isConnected = true;
+        });
+      }
+
       LatLng newLocation = LatLng(lat, lon);
       DateTime now = DateTime.now();
 
@@ -81,10 +121,9 @@ class _MapScreenState extends State<MapScreen> {
       if (routePoints.isEmpty) {
         previousLocation = newLocation;
         currentLocation = newLocation;
-        if (routePoints.isEmpty ||
-    distanceCalculator(routePoints.last, newLocation) > 5) {
-  routePoints.add(newLocation);
-}
+
+        routePoints.add(newLocation); // ✅ ALWAYS add first point
+
         lastUpdateTime = now;
 
         setState(() {
@@ -114,17 +153,58 @@ class _MapScreenState extends State<MapScreen> {
       // ✅ UPDATE STATE
       previousLocation = newLocation;
       lastUpdateTime = now;
-      routePoints.add(newLocation);
+      if (isTracking) {
+        routePoints.add(newLocation);
+        recordedRoute.add(newLocation);
+      }
+
+      if (routePoints.length > 500) {
+        routePoints.removeAt(0);
+      }
 
       setState(() {
         logText = "📍 Lat: $lat | Lon: $lon";
+        if (speed > 10) {
+          busStatus = "MOVING";
+        } else {
+          busStatus = "STOPPED";
+        }
       });
 
       // ✅ AUTO FOLLOW
       mapController.move(newLocation, 17);
 
       animateMovement(newLocation);
+   
     });
+  }
+
+  Future<void> saveRouteToFirebase() async {
+    if (recordedRoute.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text("⚠️ No route to save"),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
+    List<Map<String, double>> routeData = recordedRoute.map((point) {
+      return {"lat": point.latitude, "lon": point.longitude};
+    }).toList();
+
+    await FirebaseDatabase.instance.ref("routes").push().set({
+      "timestamp": DateTime.now().toString(),
+      "path": routeData,
+    });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text("💾 Route saved successfully"),
+        backgroundColor: Colors.green,
+      ),
+    );
   }
 
   void animateMovement(LatLng newLocation) {
@@ -148,8 +228,8 @@ class _MapScreenState extends State<MapScreen> {
           (newLocation.longitude - previousLocation.longitude) * t;
 
       busAngle = atan2(
-        newLocation.longitude - previousLocation.longitude,
         newLocation.latitude - previousLocation.latitude,
+        newLocation.longitude - previousLocation.longitude,
       );
 
       setState(() {
@@ -162,7 +242,7 @@ class _MapScreenState extends State<MapScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text("🚍 Smart Bus Tracker"),
+        title: Text("Bus Tracker"),
         backgroundColor: Colors.green,
       ),
       body: Stack(
@@ -233,6 +313,64 @@ class _MapScreenState extends State<MapScreen> {
 
           /// 📊 DATA PANEL
           Positioned(
+            bottom: 180,
+            left: 20,
+            right: 20,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: [
+                // ▶️ START
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.green,
+                  ),
+                  onPressed: () {
+                    setState(() {
+                      isTracking = true;
+                      routePoints.clear();
+                      recordedRoute.clear();
+                    });
+
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text("▶️ Tracking Started"),
+                        backgroundColor: Colors.green,
+                      ),
+                    );
+                  },
+                  child: Text("START"),
+                ),
+
+                // ⏹ STOP
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+                  onPressed: () {
+                    setState(() {
+                      isTracking = false;
+                    });
+
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text("⏹ Tracking Stopped"),
+                        backgroundColor: Colors.red,
+                      ),
+                    );
+                  },
+                  child: Text("STOP"),
+                ),
+
+                // 💾 SAVE
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(backgroundColor: Colors.blue),
+                  onPressed: () async {
+                    await saveRouteToFirebase();
+                  },
+                  child: Text("SAVE"),
+                ),
+              ],
+            ),
+          ),
+          Positioned(
             bottom: 20,
             left: 20,
             right: 20,
@@ -260,6 +398,14 @@ class _MapScreenState extends State<MapScreen> {
                     "📍 Distance: ${totalDistance.toStringAsFixed(3)} km",
                     style: TextStyle(color: Colors.blue),
                   ),
+                  Text(
+                    busStatus == "MOVING" ? "🟢 Bus Moving" : "🔴 Bus Stopped",
+                    style: TextStyle(
+                      color: busStatus == "MOVING" ? Colors.green : Colors.red,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 16,
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -267,5 +413,12 @@ class _MapScreenState extends State<MapScreen> {
         ],
       ),
     );
+  }
+
+  @override
+  void dispose() {
+    gpsSub?.cancel(); // 🔥 stop Firebase listener
+    animationTimer?.cancel(); // 🔥 stop animation
+    super.dispose();
   }
 }
