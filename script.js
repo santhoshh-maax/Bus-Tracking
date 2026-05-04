@@ -19,10 +19,10 @@ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
   attribution: "© OpenStreetMap"
 }).addTo(map);
 
-// 🚍 BUS ICON (small = professional look)
+// 🚍 BUS ICON
 var busIcon = L.icon({
   iconUrl: "bus.png",
-  iconSize: [28, 28],
+  iconSize: [40, 40],
   iconAnchor: [14, 14]
 });
 
@@ -65,35 +65,29 @@ db.ref("gps").limitToLast(1).on("value", (snapshot) => {
 
   const key = Object.keys(data)[0];
   const val = data[key];
+
   let sim = val.sim || "UNKNOWN";
-let net = val.net || "UNKNOWN";
-let gps = val.gps || "WAITING";
+  let net = val.net || "UNKNOWN";
+  let gps = val.gps || "WAITING";
 
   let lat = val.lat;
   let lon = val.lon;
 
   if (!lat || !lon) return;
 
-  // ✅ ONLINE detection
-  let isNew = false;
+  // 📡 UPDATE STATUS UI (FIXED)
+  document.getElementById("simStatus").innerHTML = "📡 SIM: " + sim;
+  document.getElementById("netStatus").innerHTML = "📶 NETWORK: " + net;
+  document.getElementById("gpsStatus").innerHTML = "📍 GPS: " + gps;
 
-  if (lastLat === null || lastLon === null) {
-    isNew = true;
-  } else if (
-    Math.abs(lat - lastLat) > 0.00001 ||
-    Math.abs(lon - lastLon) > 0.00001
-  ) {
-    isNew = true;
-  }
+  document.getElementById("simStatus").style.color =
+    sim === "OK" ? "lime" : "red";
 
-  if (isNew) {
-    lastUpdate = Date.now();
-    lastLat = lat;
-    lastLon = lon;
-  }
+  document.getElementById("netStatus").style.color =
+    net === "OK" ? "lime" : "red";
 
-  // 🚍 animate bus
-  animateMarker(lat, lon);
+  document.getElementById("gpsStatus").style.color =
+    gps === "RECEIVED" ? "lime" : "orange";
 
   // 📏 Distance
   let dist = 0;
@@ -103,18 +97,23 @@ let gps = val.gps || "WAITING";
     dist = getDistance(prevLat, prevLon, lat, lon);
   }
 
+  // 🚍 MOVE ONLY IF REAL MOVEMENT
+  if (dist > 0.005) {
+    animateMarker(lat, lon);
+  }
+
   // ⏱ Time
   let timeDiff = 0;
   if (lastUpdateTime != null) {
     timeDiff = (now - lastUpdateTime) / 1000;
   }
 
-  // 🚀 Speed (safe)
+  // 🚀 Speed
   if (timeDiff > 0.5) {
     speed = (dist / timeDiff) * 3600;
   }
 
-  // 🧠 MOVEMENT LOGIC (combined)
+  // 🧠 MOVEMENT LOGIC
   if (dist > 0.003 && speed > 5) {
     moveScore++;
   } else {
@@ -123,21 +122,17 @@ let gps = val.gps || "WAITING";
 
   moveScore = Math.max(0, Math.min(moveScore, 5));
 
-  if (moveScore >= 3) {
-    busStatus = "MOVING";
-  } else {
-    busStatus = "STOPPED";
-  }
+  busStatus = moveScore >= 3 ? "MOVING" : "STOPPED";
 
   lastUpdateTime = now;
 
-  // 📍 ROUTE (ignore noise)
+  // 📍 ROUTE
   if (tracking && dist > 0.003) {
     route.addLatLng([lat, lon]);
     routePoints.push({ lat, lon });
   }
 
-  // 📊 Distance + Speed UI
+  // 📊 UI
   if (prevLat != null) {
     totalDistance += dist;
 
@@ -154,7 +149,7 @@ let gps = val.gps || "WAITING";
   document.getElementById("distance").innerHTML =
     "📏 Distance: " + totalDistance.toFixed(3) + " km";
 
-  // 🚍 BUS STATUS UI (FIXED LOCATION)
+  // 🚍 BUS STATUS
   if (busStatus === "MOVING") {
     document.getElementById("busStatus").innerHTML = "🚍 MOVING";
     document.getElementById("busStatus").style.color = "lime";
@@ -162,15 +157,9 @@ let gps = val.gps || "WAITING";
     document.getElementById("busStatus").innerHTML = "🛑 STOPPED";
     document.getElementById("busStatus").style.color = "red";
   }
- document.getElementById("simStatus").style.color =
-  sim === "OK" ? "lime" : "red";
 
-document.getElementById("netStatus").style.color =
-  net === "OK" ? "lime" : "red";
-
-document.getElementById("gpsStatus").style.color =
-  gps === "RECEIVED" ? "lime" : "orange";
-
+  // 📡 ONLINE STATUS
+  lastUpdate = Date.now();
 });
 
 // 🔴 OFFLINE CHECK
@@ -188,7 +177,7 @@ setInterval(() => {
   }
 }, 3000);
 
-// 🚍 ANIMATION (fixed rotation)
+// 🚍 ANIMATION
 function animateMarker(newLat, newLon) {
 
   if (!currentLatLng) {
@@ -203,8 +192,6 @@ function animateMarker(newLat, newLon) {
 
   let lat1 = currentLatLng[0];
   let lon1 = currentLatLng[1];
-
-  let dist = getDistance(lat1, lon1, newLat, newLon);
 
   let latStep = (newLat - lat1) / steps;
   let lonStep = (newLon - lon1) / steps;
@@ -229,9 +216,7 @@ function animateMarker(newLat, newLon) {
 
     marker.setLatLng([lat, lon]);
 
-    if (dist > 0.005) {
-      marker.setRotationAngle(angle);
-    }
+    marker.setRotationAngle(angle);
 
     map.panTo([lat, lon]);
 
