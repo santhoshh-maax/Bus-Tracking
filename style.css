@@ -1,0 +1,66 @@
+html, body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+.header {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  z-index: 1000;
+}
+
+#map {
+  height: 100vh;   /* FULL screen */
+  width: 100%;
+}
+
+/* 📦 Compact floating panel */
+.panel {
+  position: absolute;
+  bottom: 15px;
+  right: 15px;
+
+  width: 240px;          /* 🔥 smaller width */
+  padding: 10px;
+
+  background: rgba(0, 0, 0, 0.85);
+  color: white;
+
+  border-radius: 12px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+
+  font-size: 13px;
+  line-height: 1.4;
+
+  z-index: 1000;
+}
+@media (max-width: 600px) {
+  .panel {
+    width: 180px;
+    font-size: 12px;
+  }
+}
+.buttons button {
+  margin: 5px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: none;
+  cursor: pointer;
+}
+
+button:nth-child(1){background:green;color:white;}
+button:nth-child(2){background:red;color:white;}
+button:nth-child(3){background:blue;color:white;}
+button:nth-child(4){background:orange;color:white;}
+button:nth-child(5){background:gray;color:white;}
+button:nth-child(6){background:purple;color:white;}
+
+#snapshots img {
+  width: 120px;
+  margin: 5px;
+  border-radius: 6px;
+}
