@@ -3,6 +3,10 @@
 #define MODEM_PWRKEY 10
 
 String gpsData = "";
+String simStatus = "UNKNOWN";
+String netStatus = "UNKNOWN";
+String gpsStatus = "WAITING";
+unsigned long lastStatusCheck = 0;
 
 // Send AT command with intelligent wait for completion strings
 String sendAT(String cmd, int waitTime = 2000) { 
@@ -49,6 +53,17 @@ void setup() {
 }
 
 void loop() {
+
+    if (millis() - lastStatusCheck > 10000) {
+
+    String simRes = sendAT("AT+CPIN?", 1000);
+    simStatus = (simRes.indexOf("READY") != -1) ? "OK" : "FAIL";
+
+    String netRes = sendAT("AT+CGATT?", 1000);
+    netStatus = (netRes.indexOf(": 1") != -1) ? "OK" : "FAIL";
+
+    lastStatusCheck = millis();
+  }
   // 1. Get GPS Info[cite: 2]
   Serial2.println("AT+CGPSINFO");
   delay(1000); 
@@ -58,6 +73,7 @@ void loop() {
 
   if (gpsData.indexOf(",,,,,,,,") != -1 || gpsData.indexOf("ERROR") != -1) {
     Serial.println("⏳ Waiting for GPS fix...");
+    gpsStatus = "WAITING"; 
     delay(2000);
     return;
   }
@@ -81,10 +97,17 @@ void loop() {
   float longitude = lonStr.substring(0, 3).toFloat() + lonStr.substring(3).toFloat() / 60.0;
   if (latDir == "S") latitude *= -1;
   if (lonDir == "W") longitude *= -1;
+  gpsStatus = "RECEIVED";
 
   Serial.println("📍 " + String(latitude, 6) + "," + String(longitude, 6));
 
-  String json = "{\"lat\":" + String(latitude, 6) + ",\"lon\":" + String(longitude, 6) + "}";
+  String json = "{";
+json += "\"lat\":" + String(latitude, 6) + ",";
+json += "\"lon\":" + String(longitude, 6) + ",";
+json += "\"sim\":\"" + simStatus + "\",";
+json += "\"net\":\"" + netStatus + "\",";
+json += "\"gps\":\"" + gpsStatus + "\"";
+json += "}";
   String url = "https://bus-tracking-eae81-default-rtdb.asia-southeast1.firebasedatabase.app/gps.json";
 
   // --- RELIABLE HTTP FLOW ---

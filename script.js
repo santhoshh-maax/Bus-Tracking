@@ -1,4 +1,4 @@
-// 🔥 Firebase config (COMPAT VERSION)
+// 🔥 Firebase config
 const firebaseConfig = {
   apiKey: "AIzaSyAmUTmxbPzmxQ74i2peGV6IGTQo0rrz-FM",
   authDomain: "bus-tracking-eae81.firebaseapp.com",
@@ -19,11 +19,11 @@ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
   attribution: "© OpenStreetMap"
 }).addTo(map);
 
-// 🚍 BUS ICON
+// 🚍 BUS ICON (small = professional look)
 var busIcon = L.icon({
-  iconUrl: "bus.png",   // make sure file exists
-  iconSize: [40, 40],
-  iconAnchor: [15, 15]
+  iconUrl: "bus.png",
+  iconSize: [28, 28],
+  iconAnchor: [14, 14]
 });
 
 var marker = L.marker([10, 78], {
@@ -37,6 +37,7 @@ var route = L.polyline([], { color: 'blue', weight: 4 }).addTo(map);
 // 🔄 STATE
 let currentLatLng = null;
 let animationInterval = null;
+let lastAngle = 0;
 
 let prevLat = null;
 let prevLon = null;
@@ -49,7 +50,12 @@ let lastUpdate = null;
 
 let tracking = true;
 let routePoints = [];
-let startTime = null;
+
+let busStatus = "STOPPED";
+let moveScore = 0;
+
+let speed = 0;
+let lastUpdateTime = null;
 
 // 🔥 FIREBASE LISTENER
 db.ref("gps").limitToLast(1).on("value", (snapshot) => {
@@ -59,13 +65,16 @@ db.ref("gps").limitToLast(1).on("value", (snapshot) => {
 
   const key = Object.keys(data)[0];
   const val = data[key];
+  let sim = val.sim || "UNKNOWN";
+let net = val.net || "UNKNOWN";
+let gps = val.gps || "WAITING";
 
   let lat = val.lat;
   let lon = val.lon;
 
   if (!lat || !lon) return;
 
-  // ✅ ONLINE only when new data
+  // ✅ ONLINE detection
   let isNew = false;
 
   if (lastLat === null || lastLon === null) {
@@ -83,38 +92,85 @@ db.ref("gps").limitToLast(1).on("value", (snapshot) => {
     lastLon = lon;
   }
 
-  // 🚍 Smooth movement
+  // 🚍 animate bus
   animateMarker(lat, lon);
 
-  // 📏 Distance calculation
+  // 📏 Distance
   let dist = 0;
+  let now = Date.now();
+
   if (prevLat != null) {
     dist = getDistance(prevLat, prevLon, lat, lon);
   }
 
-  // 📍 Route tracking (ignore noise)
+  // ⏱ Time
+  let timeDiff = 0;
+  if (lastUpdateTime != null) {
+    timeDiff = (now - lastUpdateTime) / 1000;
+  }
+
+  // 🚀 Speed (safe)
+  if (timeDiff > 0.5) {
+    speed = (dist / timeDiff) * 3600;
+  }
+
+  // 🧠 MOVEMENT LOGIC (combined)
+  if (dist > 0.003 && speed > 5) {
+    moveScore++;
+  } else {
+    moveScore--;
+  }
+
+  moveScore = Math.max(0, Math.min(moveScore, 5));
+
+  if (moveScore >= 3) {
+    busStatus = "MOVING";
+  } else {
+    busStatus = "STOPPED";
+  }
+
+  lastUpdateTime = now;
+
+  // 📍 ROUTE (ignore noise)
   if (tracking && dist > 0.003) {
     route.addLatLng([lat, lon]);
     routePoints.push({ lat, lon });
   }
 
-  // 📊 Speed + distance
+  // 📊 Distance + Speed UI
   if (prevLat != null) {
     totalDistance += dist;
 
     document.getElementById("speed").innerHTML =
-      "🚀 Speed: " + (dist * 3.6).toFixed(2) + " km/h";
+      "🚀 Speed: " + speed.toFixed(2) + " km/h";
   }
 
   prevLat = lat;
   prevLon = lon;
 
-  // 📊 UI
   document.getElementById("coords").innerHTML =
     `📍 Lat: ${lat.toFixed(6)} | Lon: ${lon.toFixed(6)}`;
 
   document.getElementById("distance").innerHTML =
     "📏 Distance: " + totalDistance.toFixed(3) + " km";
+
+  // 🚍 BUS STATUS UI (FIXED LOCATION)
+  if (busStatus === "MOVING") {
+    document.getElementById("busStatus").innerHTML = "🚍 MOVING";
+    document.getElementById("busStatus").style.color = "lime";
+  } else {
+    document.getElementById("busStatus").innerHTML = "🛑 STOPPED";
+    document.getElementById("busStatus").style.color = "red";
+  }
+ document.getElementById("simStatus").style.color =
+  sim === "OK" ? "lime" : "red";
+
+document.getElementById("netStatus").style.color =
+  net === "OK" ? "lime" : "red";
+
+document.getElementById("gpsStatus").style.color =
+  gps === "RECEIVED" ? "lime" : "orange";
+
 });
 
 // 🔴 OFFLINE CHECK
@@ -132,7 +188,7 @@ setInterval(() => {
   }
 }, 3000);
 
-// 🚍 ANIMATION
+// 🚍 ANIMATION (fixed rotation)
 function animateMarker(newLat, newLon) {
 
   if (!currentLatLng) {
@@ -148,10 +204,19 @@ function animateMarker(newLat, newLon) {
   let lat1 = currentLatLng[0];
   let lon1 = currentLatLng[1];
 
+  let dist = getDistance(lat1, lon1, newLat, newLon);
+
   let latStep = (newLat - lat1) / steps;
   let lonStep = (newLon - lon1) / steps;
 
-  let angle = getAngle(lat1, lon1, newLat, newLon);
+  let newAngle = getAngle(lat1, lon1, newLat, newLon);
+
+  let diff = newAngle - lastAngle;
+  if (diff > 180) diff -= 360;
+  if (diff < -180) diff += 360;
+
+  let angle = lastAngle + diff * 0.3;
+  lastAngle = angle;
 
   if (animationInterval) clearInterval(animationInterval);
 
@@ -163,7 +228,10 @@ function animateMarker(newLat, newLon) {
     let lon = lon1 + lonStep * i;
 
     marker.setLatLng([lat, lon]);
-    marker.setRotationAngle(angle);
+
+    if (dist > 0.005) {
+      marker.setRotationAngle(angle);
+    }
 
     map.panTo([lat, lon]);
 
@@ -194,14 +262,12 @@ function getAngle(lat1, lon1, lat2, lon2) {
   return Math.atan2(lon2 - lon1, lat2 - lat1) * (180 / Math.PI);
 }
 
-// 🎮 BUTTON FUNCTIONS
+// 🎮 BUTTONS
 function startTracking() {
   tracking = true;
   routePoints = [];
   route.setLatLngs([]);
   totalDistance = 0;
-  startTime = Date.now();
-
   alert("▶️ Tracking Started");
 }
 
@@ -214,7 +280,6 @@ function clearRoute() {
   route.setLatLngs([]);
   routePoints = [];
   totalDistance = 0;
-
   alert("🧹 Route Cleared");
 }
 
@@ -234,7 +299,6 @@ function saveRoute() {
 
 function loadRoutes() {
   db.ref("routes").once("value", (snapshot) => {
-
     snapshot.forEach((child) => {
       let path = child.val().path;
 
@@ -247,17 +311,3 @@ function loadRoutes() {
     alert("📂 Routes Loaded");
   });
 }
-
-// function captureMap() {
-//   leafletImage(map, function(err, canvas) {
-
-//     let img = canvas.toDataURL("image/png");
-
-//     let link = document.createElement("a");
-//     link.href = img;
-//     link.download = "route.png";
-//     link.click();
-
-//     alert("📸 Snapshot Saved!");
-//   });
-// }
