@@ -6,6 +6,7 @@ String gpsData = "";
 String simStatus = "UNKNOWN";
 String netStatus = "UNKNOWN";
 String gpsStatus = "WAITING";
+String signalStrengthStr = "UNKNOWN"; // 📶 Global variable to hold your human-readable signal text
 unsigned long lastStatusCheck = 0;
 
 // Send AT command with intelligent wait for completion strings
@@ -25,24 +26,54 @@ String sendAT(String cmd, int waitTime = 2000) {
   return response;
 }
 
-// Automatically checks and heals network links mid-route for ANY SIM card
+// Deep cellular recovery engine for high-mobility dead zones with Signal Strength Tracking
 bool checkAndRecoverNetwork() {
   String cpinCheck = sendAT("AT+CPIN?", 1000);
   if (cpinCheck.indexOf("READY") == -1) {
     simStatus = "FAIL";
-    Serial.println("⚠️ SIM Card missing or locked! Retrying...");
+    signalStrengthStr = "NO SIGNAL";
+    Serial.println("⚠️ SIM Card missing or disconnected! Retrying power layers...");
     return false;
   }
   simStatus = "OK";
 
+  // 📶 FETCH SIGNAL STRENGTH (CSQ)
+  String csqCheck = sendAT("AT+CSQ", 500);
+  int csqIdx = csqCheck.indexOf("+CSQ:");
+  if (csqIdx != -1) {
+    String rssiRaw = csqCheck.substring(csqIdx + 5, csqCheck.indexOf(",", csqIdx));
+    rssiRaw.trim();
+    int rssiVal = rssiRaw.toInt();
+    
+    // Evaluate and assign the text to our global variable for Firebase
+    if (rssiVal == 99) {
+      signalStrengthStr = "NO SIGNAL";
+    } else if (rssiVal < 10) {
+      signalStrengthStr = "POOR";
+    } else if (rssiVal < 15) {
+      signalStrengthStr = "FAIR";
+    } else {
+      signalStrengthStr = "GOOD"; // Captures both Good and Excellent ranges cleanly
+    }
+    
+    Serial.println("📶 Cellular Signal Strength Evaluated: " + signalStrengthStr + " (" + rssiRaw + ")");
+  } else {
+    signalStrengthStr = "NO SIGNAL";
+  }
+
   String cregCheck = sendAT("AT+CREG?", 1000);
   if (cregCheck.indexOf(",1") == -1 && cregCheck.indexOf(",5") == -1) {
     netStatus = "FAIL";
-    Serial.println("📡 Lost Network Registration. Executing Deep Recovery...");
+    signalStrengthStr = "NO SIGNAL";
+    Serial.println("📡 Bus in Network Dead Zone. Executing Multi-Stage Link Recovery...");
     
-    sendAT("AT+COPS=0", 2000);   // Force modem to scan networks automatically
-    sendAT("AT+CGATT=1", 2000);   // Re-attach core network packet services
-    sendAT("AT+CGACT=1,1", 2000); // Re-activate standard data context
+    sendAT("AT+HTTPTERM", 500); 
+    sendAT("AT+CGATT=0", 1000);  
+    delay(1000);
+    
+    sendAT("AT+COPS=0", 2000);   
+    sendAT("AT+CGATT=1", 2000);  
+    sendAT("AT+CGACT=1,1", 2000); 
     
     delay(2000);
     
@@ -63,46 +94,43 @@ void setup() {
   digitalWrite(MODEM_PWRKEY, LOW);
   delay(8000); 
 
-  Serial.println("🚀 Initializing...");
+  Serial.println("🚀 Bus Tracker Initializing...");
   sendAT("AT", 1000);
   sendAT("AT+CPIN?", 1000);
 
-  // Universal data attachment (Works across carriers seamlessly)
   sendAT("AT+CGATT=1", 2000);
   sendAT("AT+CGACT=1,1", 2000);
   
+  sendAT("AT+HTTPTERM", 500); 
   sendAT("AT+HTTPINIT", 500);
   sendAT("AT+HTTPPARA=\"CID\",1", 500);
   sendAT("AT+HTTPPARA=\"SSLCFG\",0", 500);
   sendAT("AT+HTTPTERM", 500); 
 
   sendAT("AT+CGNSSPWR=1", 1000);
-  Serial.println("✅ Setup Done");
+  Serial.println("✅ Setup Sequences Completed");
 }
 
 void loop() {
-  // Always check network integrity before moving forward
   if (!checkAndRecoverNetwork()) {
-    Serial.println("🛑 Network unready. Retrying link layer...");
+    Serial.println("🛑 Cell Tower unreachable. Backing off for 4 seconds...");
     delay(4000); 
     return;      
   }
 
-  // 1. Request raw GPS data
+  // Request fresh GPS data
   Serial2.println("AT+CGPSINFO");
-  delay(1000); 
+  delay(600); 
 
   gpsData = "";
   while (Serial2.available()) gpsData += char(Serial2.read());
-  Serial.println("Raw GPS Response: " + gpsData);
-  // 🔥 STRICT CHECK: If no satellite lock or data is corrupted, drop this cycle completely!
+
   if (gpsData.indexOf(",,,,,,,,") != -1 || gpsData.indexOf("ERROR") != -1) {
-    Serial.println("⏳ Waiting for a true GPS satellite lock. Will NOT send 0 data to cloud.");
+    Serial.println("⏳ Waiting for true GPS Satellite fix. Skipping upload batch...");
     delay(2000);
-    return;  // Exits loop here; prevents any Firebase transmission
+    return;  
   }
 
-  // Parse valid GPS fields
   int startIdx = gpsData.indexOf(":");
   if (startIdx == -1) return;
   String data = gpsData.substring(startIdx + 2);
@@ -117,72 +145,81 @@ void loop() {
   String lonStr = data.substring(c2 + 1, c3);
   String lonDir = data.substring(c3 + 1, c4);
 
-  // Translate NMEA layout to geometric decimal formats
   float latitude = latStr.substring(0, 2).toFloat() + latStr.substring(2).toFloat() / 60.0;
   float longitude = lonStr.substring(0, 3).toFloat() + lonStr.substring(3).toFloat() / 60.0;
   if (latDir == "S") latitude *= -1;
   if (lonDir == "W") longitude *= -1;
   gpsStatus = "RECEIVED";
 
-  Serial.println("📍 Valid Lock Verified: " + String(latitude, 6) + "," + String(longitude, 6));
+  Serial.println("📍 Active Location Core Calculated: " + String(latitude, 6) + "," + String(longitude, 6));
 
-  // Package the JSON string (Fixed structural colon layout)
+  // 🛠️ UPDATED JSON payload to dynamically include the signal text field
   String json = "{";
   json += "\"lat\":" + String(latitude, 6) + ",";
   json += "\"lon\":" + String(longitude, 6) + ",";
   json += "\"sim\":\"" + simStatus + "\",";
   json += "\"net\":\"" + netStatus + "\",";
-  json += "\"gps\":\"" + gpsStatus + "\"";
+  json += "\"gps\":\"" + gpsStatus + "\",";
+  json += "\"signal\":\"" + signalStrengthStr + "\""; // 📶 Appears as "POOR", "FAIR", or "GOOD" in Firebase
   json += "}";
   
   String url = "https://bus-tracking-eae81-default-rtdb.asia-southeast1.firebasedatabase.app/gps.json";
 
-  // --- RELIABLE HTTP DATA UPLOAD ---
-  String initRes = sendAT("AT+HTTPINIT", 500);
-  if (initRes.indexOf("ERROR") != -1) {
-    sendAT("AT+HTTPTERM", 500);
-    sendAT("AT+HTTPINIT", 500);
-  }
+  // --- FAULT-RESISTANT HTTP TRANSACTION ENGINE ---
+  Serial2.println("AT+HTTPINIT"); 
+  delay(150); 
+  while(Serial2.available()) Serial.write(Serial2.read()); 
 
-  sendAT("AT+HTTPPARA=\"URL\",\"" + url + "\"", 300);
-  sendAT("AT+HTTPPARA=\"CONTENT\",\"application/json\"", 300);
+  sendAT("AT+HTTPPARA=\"URL\",\"" + url + "\"", 200);
+  sendAT("AT+HTTPPARA=\"CONTENT\",\"application/json\"", 200);
 
-  // Handshake sequence
-  Serial2.println("AT+HTTPDATA=" + String(json.length()) + ",2000");
+  // Data payload handshake allocation
+  Serial2.println("AT+HTTPDATA=" + String(json.length()) + ",2000"); 
   delay(200); 
   Serial2.print(json);
-  delay(100);
+  delay(150);
+  while(Serial2.available()) Serial.write(Serial2.read()); 
 
-  // Execute transmission request
+  // Execute actual post transmission
+  Serial.println(">> AT+HTTPACTION=1");
   Serial2.println("AT+HTTPACTION=1"); 
   
   String actionResult = "";
   unsigned long startWait = millis();
   bool success = false;
 
-  // Track the transaction endpoint
-  while (millis() - startWait < 5000) {
+  while (millis() - startWait < 3500) { 
     if (Serial2.available()) {
       char c = Serial2.read();
       actionResult += c;
-      if (actionResult.indexOf("+HTTPACTION: 1,200") != -1) {
+      
+      if (actionResult.indexOf("+HTTPACTION:") != -1 && actionResult.indexOf("\n", actionResult.indexOf("+HTTPACTION:")) == -1) {
+        delay(50); 
+        while (Serial2.available()) {
+          actionResult += char(Serial2.read());
+        }
+      }
+
+      if (actionResult.indexOf(",200,") != -1 || actionResult.indexOf(",201,") != -1) {
         success = true;
         break;
       }
-      if (actionResult.indexOf("+HTTPACTION: 1,") != -1 && actionResult.indexOf(",200") == -1) {
-        break;
+      
+      if (actionResult.indexOf("+HTTPACTION:") != -1 && actionResult.indexOf(",200,") == -1 && actionResult.indexOf(",201,") == -1 && actionResult.endsWith("\n")) {
+        break; 
       }
     }
   }
+  Serial.println("[ASYNC ACTION RESP]: " + actionResult);
 
   sendAT("AT+HTTPTERM", 300);
 
   if (success) {
-    Serial.println("✅ Firebase UPDATE SUCCESS");
+    Serial.println("✅ Firebase Real-Time Update: SUCCESS");
   } else {
-    Serial.println("❌ Firebase UPDATE FAILED");
+    Serial.println("❌ Firebase Real-Time Update: RESPONSE ERROR OR TIMEOUT");
   }
 
-  Serial.println("-------------------------");
-  delay(3000); 
+  Serial.println("----------------------------------------");
+  delay(2000); 
 }

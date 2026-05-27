@@ -34,6 +34,16 @@ var marker = L.marker([10, 78], {
 // 📍 ROUTE
 var route = L.polyline([], { color: 'blue', weight: 4 }).addTo(map);
 
+// 🔄 AUTOMATICALLY LOAD SAVED STOPS FROM FIREBASE ON INITIAL PAGE LOAD
+db.ref("stops").once("value", (snapshot) => {
+  if (snapshot.exists()) {
+    snapshot.forEach((childSnapshot) => {
+      const stop = childSnapshot.val();
+      createStopMarker(stop.lat, stop.lon, stop.stopName);
+    });
+  }
+});
+
 // 🔄 STATE
 let currentLatLng = null;
 let animationInterval = null;
@@ -50,6 +60,7 @@ let lastUpdate = null;
 
 let tracking = true;
 let routePoints = [];
+let stopMarkers = [];
 
 let busStatus = "STOPPED";
 let moveScore = 0;
@@ -254,6 +265,46 @@ function startTracking() {
   route.setLatLngs([]);
   totalDistance = 0;
   alert("▶️ Tracking Started");
+}
+// ➕ ADD STOP FUNCTION
+function addStop() {
+  // Guard clause: Ensure we have actually received data points from the bus first
+  if (!prevLat || !prevLon) {
+    alert("⚠️ No GPS location available yet to mark a stop!");
+    return;
+  }
+
+  // Define stop payload structure
+  const stopData = {
+    lat: prevLat,
+    lon: prevLon,
+    timestamp: new Date().toString(),
+    stopName: "Stop " + (stopMarkers.length + 1)
+  };
+
+  // 1. Push payload into a clean "stops" child node in Firebase Real-time Database
+  db.ref("stops").push(stopData)
+    .then(() => {
+      // 2. Drop the visual pin point on the map array interface natively
+      createStopMarker(stopData.lat, stopData.lon, stopData.stopName);
+      alert(`📌 ${stopData.stopName} Saved Successfully!`);
+    })
+    .catch((error) => {
+      console.error("Firebase Stop Save Failure: ", error);
+      alert("❌ Database error. Could not save stop configuration.");
+    });
+}
+
+// Helper function to create a pin point on the map canvas
+function createStopMarker(lat, lon, label) {
+  // Use Leaflet's default red/blue pin layout and bind a popup to label it
+  let stopMarker = L.marker([lat, lon])
+    .addTo(map)
+    .bindPopup(`<b>${label}</b><br>Lat: ${lat.toFixed(6)}<br>Lon: ${lon.toFixed(6)}`)
+    .openPopup();
+
+  // Store marker instance in our global array context
+  stopMarkers.push(stopMarker);
 }
 
 function stopTracking() {
