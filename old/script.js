@@ -9,13 +9,11 @@ const firebaseConfig = {
   appId: "1:651200089794:web:0953aecdd5acb98b95b55b"
 };
 
-console.log("Bus tracker script loaded");
-
 firebase.initializeApp(firebaseConfig);
 const db = firebase.database();
 
 // 🗺 MAP
-var map = L.map('map').setView([0.0, 0.0], 2);
+var map = L.map('map').setView([10.0, 78.0], 16);
 
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
   attribution: "© OpenStreetMap"
@@ -28,14 +26,13 @@ var busIcon = L.icon({
   iconAnchor: [14, 14]
 });
 
-var marker = null;
-const LOCAL_STORAGE_KEY = "busTrackerLastLocation";
-const FALLBACK_LAT = 10.106031;
-const FALLBACK_LON = 78.643106;
+var marker = L.marker([10, 78], {
+  icon: busIcon,
+  rotationAngle: 0
+}).addTo(map);
 
 // 📍 ROUTE
 var route = L.polyline([], { color: 'blue', weight: 4 }).addTo(map);
-var stopMarkers = [];
 
 // 🔄 STATE
 let currentLatLng = null;
@@ -60,174 +57,20 @@ let moveScore = 0;
 let speed = 0;
 let lastUpdateTime = null;
 
-function saveLastLocation(lat, lon) {
-  try {
-    window.localStorage.setItem(
-      LOCAL_STORAGE_KEY,
-      JSON.stringify({ lat, lon, seenAt: Date.now() })
-    );
-  } catch (e) {
-    console.warn("Unable to save last location", e);
-  }
-}
-
-function isValidLatLon(lat, lon) {
-  if (lat === null || lon === null || typeof lat === 'undefined' || typeof lon === 'undefined') return false;
-  const parsedLat = Number(lat);
-  const parsedLon = Number(lon);
-  if (Number.isNaN(parsedLat) || Number.isNaN(parsedLon)) return false;
-  if (parsedLat === 0 && parsedLon === 0) return false;
-  if (parsedLat < -90 || parsedLat > 90 || parsedLon < -180 || parsedLon > 180) return false;
-  return true;
-}
-
-function findLatLonDeep(obj) {
-  if (!obj || typeof obj !== 'object') return null;
-  if (isValidLatLon(obj.lat, obj.lon)) {
-    return { lat: Number(obj.lat), lon: Number(obj.lon), raw: obj };
-  }
-
-  for (const key in obj) {
-    if (!Object.prototype.hasOwnProperty.call(obj, key)) continue;
-    const child = obj[key];
-    if (child && typeof child === 'object') {
-      const found = findLatLonDeep(child);
-      if (found) {
-        found.key = key;
-        return found;
-      }
-    }
-  }
-
-  return null;
-}
-
-function parseGpsSnapshot(data) {
-  if (!data) return null;
-  return findLatLonDeep(data);
-}
-
-function loadLastLocation() {
-  console.log("Attempting to load last location...");
-
-  let found = false;
-  try {
-    const stored = window.localStorage.getItem(LOCAL_STORAGE_KEY);
-    if (stored) {
-      const parsed = JSON.parse(stored);
-      if (parsed?.lat && parsed?.lon) {
-        console.log("Last saved location from localStorage:", parsed.lat, parsed.lon);
-        animateMarker(parsed.lat, parsed.lon);
-        found = true;
-      } else {
-        console.log("No valid location found in localStorage.");
-      }
-    } else {
-      console.log("No location stored in localStorage.");
-    }
-  } catch (e) {
-    console.warn("Unable to load last location", e);
-  }
-
-  db.ref("gps").limitToLast(1).once("value").then((snapshot) => {
-    const data = snapshot.val();
-    console.log("Raw Firebase gps snapshot:", data);
-
-    const gps = parseGpsSnapshot(data);
-    if (!gps) {
-      console.log("Firebase gps data did not contain valid lat/lon.");
-      if (!found) {
-        console.log("Using offline fallback location.");
-        animateMarker(FALLBACK_LAT, FALLBACK_LON);
-        document.getElementById("coords").innerHTML =
-          `📍 Lat: ${FALLBACK_LAT.toFixed(6)} | Lon: ${FALLBACK_LON.toFixed(6)}`;
-      }
-      if (data && typeof data === 'object') {
-        for (const key in data) {
-          if (!Object.prototype.hasOwnProperty.call(data, key)) continue;
-          console.log("Firebase child entry:", key, data[key]);
-        }
-      }
-      return;
-    }
-
-    console.log("Last location fetched from Firebase:", gps.lat, gps.lon, "(key:", gps.key || 'root', ")");
-    animateMarker(gps.lat, gps.lon);
-    saveLastLocation(gps.lat, gps.lon);
-  }).catch((error) => {
-    console.warn("Firebase fetch failed", error);
-    if (!found) {
-      console.log("Using offline fallback location because Firebase fetch failed.");
-      animateMarker(FALLBACK_LAT, FALLBACK_LON);
-      document.getElementById("coords").innerHTML =
-        `📍 Lat: ${FALLBACK_LAT.toFixed(6)} | Lon: ${FALLBACK_LON.toFixed(6)}`;
-    }
-  });
-}
-
-loadLastLocation();
-
-// � Make the panel draggable on touch/mobile
-const panel = document.querySelector('.panel');
-let panelDrag = false;
-let dragOffsetX = 0;
-let dragOffsetY = 0;
-
-if (panel) {
-  panel.addEventListener('pointerdown', (event) => {
-    if (event.target.closest('button')) return;
-    panelDrag = true;
-    dragOffsetX = event.clientX - panel.offsetLeft;
-    dragOffsetY = event.clientY - panel.offsetTop;
-    panel.setPointerCapture(event.pointerId);
-  });
-
-  panel.addEventListener('pointermove', (event) => {
-    if (!panelDrag) return;
-    const x = event.clientX - dragOffsetX;
-    const y = event.clientY - dragOffsetY;
-    const maxX = window.innerWidth - panel.offsetWidth - 10;
-    const maxY = window.innerHeight - panel.offsetHeight - 10;
-
-    panel.style.left = Math.min(Math.max(10, x), maxX) + 'px';
-    panel.style.top = Math.min(Math.max(10, y), maxY) + 'px';
-    panel.style.right = 'auto';
-    panel.style.bottom = 'auto';
-  });
-
-  panel.addEventListener('pointerup', () => {
-    panelDrag = false;
-  });
-  panel.addEventListener('pointercancel', () => {
-    panelDrag = false;
-  });
-}
-
-// �🔥 FIREBASE LISTENER
+// 🔥 FIREBASE LISTENER
 db.ref("gps").limitToLast(1).on("value", (snapshot) => {
 
   const data = snapshot.val();
   if (!data) return;
 
-  const parsed = parseGpsSnapshot(data);
-  if (!parsed) {
-    console.warn("Realtime Firebase gps update missing lat/lon", data);
-    if (data && typeof data === 'object') {
-      for (const key in data) {
-        if (!Object.prototype.hasOwnProperty.call(data, key)) continue;
-        console.log("Realtime child entry:", key, data[key]);
-      }
-    }
-    return;
-  }
-
-  const val = parsed.raw;
+  const key = Object.keys(data)[0];
+  const val = data[key];
   let sim = val.sim || "UNKNOWN";
-  let net = val.net || "UNKNOWN";
-  let gps = val.gps || "WAITING";
+let net = val.net || "UNKNOWN";
+let gps = val.gps || "WAITING";
 
-  let lat = parsed.lat;
-  let lon = parsed.lon;
+  let lat = val.lat;
+  let lon = val.lon;
 
   if (!lat || !lon) return;
 
@@ -348,20 +191,10 @@ setInterval(() => {
 // 🚍 ANIMATION (fixed rotation)
 function animateMarker(newLat, newLon) {
 
-  if (!marker) {
-    currentLatLng = [newLat, newLon];
-    marker = L.marker(currentLatLng, {
-      icon: busIcon,
-      rotationAngle: 0
-    }).addTo(map);
-    map.setView(currentLatLng, 16);
-    return;
-  }
-
   if (!currentLatLng) {
     currentLatLng = [newLat, newLon];
     marker.setLatLng(currentLatLng);
-    map.setView(currentLatLng, 16);
+    map.setView(currentLatLng);
     return;
   }
 
@@ -441,41 +274,6 @@ function startTracking() {
 function stopTracking() {
   tracking = false;
   alert("⏹ Tracking Stopped");
-}
-
-function addStop() {
-  const location = currentLatLng || [FALLBACK_LAT, FALLBACK_LON];
-  if (!location || location.length !== 2) {
-    alert("⚠️ No current location available to pin.");
-    return;
-  }
-
-  const [lat, lon] = location;
-  console.log("addStop clicked", { lat, lon, currentLatLng });
-
-  const stopMarker = L.circleMarker([lat, lon], {
-    color: "orange",
-    fillColor: "#f39c12",
-    fillOpacity: 0.8,
-    radius: 8,
-    weight: 2
-  }).addTo(map);
-
-  stopMarkers.push(stopMarker);
-
-  db.ref("points").push({
-    timestamp: new Date().toISOString(),
-    lat: Number(lat),
-    lon: Number(lon),
-    routeLength: routePoints.length,
-    message: "Stop added"
-  }).then(() => {
-    console.log("Point saved to Firebase", { lat, lon });
-    alert("📍 Stop pinned and saved to Firebase!");
-  }).catch((error) => {
-    console.warn("Unable to save stop point", error);
-    alert("⚠️ Failed to save stop point. Check console.");
-  });
 }
 
 function clearRoute() {
