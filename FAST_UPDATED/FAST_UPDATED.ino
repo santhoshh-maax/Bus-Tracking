@@ -210,15 +210,15 @@ bool uploadToFirebase(float latitude, float longitude) {
   // MOVEMENT FILTER
   // ==================================================
 
-  // if (abs(latitude - lastUploadedLat) < 0.00005 &&
-  //     abs(longitude - lastUploadedLon) < 0.00005) {
+  if (abs(latitude - lastUploadedLat) < 0.00003 &&
+      abs(longitude - lastUploadedLon) < 0.00003) {
 
-  //   Serial.println("🚌 Bus stationary - skipping upload");
+    Serial.println("🚌 Bus stationary - skipping upload");
 
-  //   uploadInProgress = false;
+    uploadInProgress = false;
 
-  //   return true;
-  // }
+    return true;
+  }
 
   String json = "{";
 
@@ -476,6 +476,16 @@ void loop() {
       String(longitude, 6)
     );
   }
+  if (latitude == 0.0 || longitude == 0.0) {
+
+    Serial.println("❌ NO VALID GPS AVAILABLE");
+
+    Serial.println("⏳ WAITING FOR FIRST GPS FIX...");
+
+    delay(3000);
+
+    return;
+}
   bool success = uploadToFirebase(latitude, longitude);
 
   if (!success) {
