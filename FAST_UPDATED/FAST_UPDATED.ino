@@ -107,7 +107,11 @@ void setup() {
   sendAT("AT+HTTPPARA=\"SSLCFG\",0", 500);
   sendAT("AT+HTTPTERM", 500); 
 
+  // 🛰️ ENABLE RAPID SATELLITE FIXES (AGPS & GLONASS)
   sendAT("AT+CGNSSPWR=1", 1000);
+  delay(500);
+  sendAT("AT+CGNSSLOADAZ=1", 1000); // Instructs modem to use cellular network assistance data
+  
   Serial.println("✅ Setup Sequences Completed");
 }
 
@@ -118,6 +122,9 @@ void loop() {
     return;      
   }
 
+  // Clear any residual junk characters sitting in the hardware Serial receive buffer
+  while(Serial2.available()) Serial2.read();
+
   // Request fresh GPS data
   Serial2.println("AT+CGPSINFO");
   delay(600); 
@@ -126,7 +133,7 @@ void loop() {
   while (Serial2.available()) gpsData += char(Serial2.read());
 
   if (gpsData.indexOf(",,,,,,,,") != -1 || gpsData.indexOf("ERROR") != -1) {
-    Serial.println("⏳ Waiting for true GPS Satellite fix. Skipping upload batch...");
+    Serial.println("⏳ Waiting for satellite orbital synchronization. Skipping upload...");
     delay(2000);
     return;  
   }
@@ -149,38 +156,53 @@ void loop() {
   float longitude = lonStr.substring(0, 3).toFloat() + lonStr.substring(3).toFloat() / 60.0;
   if (latDir == "S") latitude *= -1;
   if (lonDir == "W") longitude *= -1;
-  gpsStatus = "RECEIVED";
 
+  if (latitude == 0.0 || longitude == 0.0) {
+    Serial.println("⏳ Warning: Received empty tracking vectors (0.000000). Suppressing Firebase write...");
+    delay(2000);
+    return;
+  }
+  
+  gpsStatus = "RECEIVED";
   Serial.println("📍 Active Location Core Calculated: " + String(latitude, 6) + "," + String(longitude, 6));
 
-  // 🛠️ UPDATED JSON payload to dynamically include the signal text field
   String json = "{";
   json += "\"lat\":" + String(latitude, 6) + ",";
   json += "\"lon\":" + String(longitude, 6) + ",";
   json += "\"sim\":\"" + simStatus + "\",";
   json += "\"net\":\"" + netStatus + "\",";
   json += "\"gps\":\"" + gpsStatus + "\",";
-  json += "\"signal\":\"" + signalStrengthStr + "\""; // 📶 Appears as "POOR", "FAIR", or "GOOD" in Firebase
+  json += "\"signal\":\"" + signalStrengthStr + "\""; 
   json += "}";
   
   String url = "https://bus-tracking-eae81-default-rtdb.asia-southeast1.firebasedatabase.app/gps.json";
 
   // --- FAULT-RESISTANT HTTP TRANSACTION ENGINE ---
-  Serial2.println("AT+HTTPINIT"); 
-  delay(150); 
-  while(Serial2.available()) Serial.write(Serial2.read()); 
+  
+  // 🛠️ FIX 1: Aggressively close any ghost connection profiles before starting a new setup
+  sendAT("AT+HTTPTERM", 300); 
+  
+  // Now initialize fresh context safely without fear of an ERROR latch
+  String initResp = sendAT("AT+HTTPINIT", 500);
+  if (initResp.indexOf("ERROR") != -1) {
+    Serial.println("❌ Critical HTTP State Latch encountered! Aborting sequence loop...");
+    return;
+  }
 
   sendAT("AT+HTTPPARA=\"URL\",\"" + url + "\"", 200);
   sendAT("AT+HTTPPARA=\"CONTENT\",\"application/json\"", 200);
 
-  // Data payload handshake allocation
+  // 🛠️ FIX 2: Flush the buffers again directly before running the data handshake allocation
+  while(Serial2.available()) Serial2.read();
+
   Serial2.println("AT+HTTPDATA=" + String(json.length()) + ",2000"); 
   delay(200); 
   Serial2.print(json);
   delay(150);
-  while(Serial2.available()) Serial.write(Serial2.read()); 
+  
+  // Clear the word "DOWNLOAD" out of the reading pipeline to keep outputs clean
+  while(Serial2.available()) Serial2.read(); 
 
-  // Execute actual post transmission
   Serial.println(">> AT+HTTPACTION=1");
   Serial2.println("AT+HTTPACTION=1"); 
   
@@ -188,13 +210,13 @@ void loop() {
   unsigned long startWait = millis();
   bool success = false;
 
-  while (millis() - startWait < 3500) { 
+  while (millis() - startWait < 5500) { 
     if (Serial2.available()) {
       char c = Serial2.read();
       actionResult += c;
       
       if (actionResult.indexOf("+HTTPACTION:") != -1 && actionResult.indexOf("\n", actionResult.indexOf("+HTTPACTION:")) == -1) {
-        delay(50); 
+        delay(80); 
         while (Serial2.available()) {
           actionResult += char(Serial2.read());
         }
@@ -212,6 +234,7 @@ void loop() {
   }
   Serial.println("[ASYNC ACTION RESP]: " + actionResult);
 
+  // Clean termination sequence
   sendAT("AT+HTTPTERM", 300);
 
   if (success) {
