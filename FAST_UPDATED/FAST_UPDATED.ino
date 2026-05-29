@@ -210,15 +210,15 @@ bool uploadToFirebase(float latitude, float longitude) {
   // MOVEMENT FILTER
   // ==================================================
 
-  if (abs(latitude - lastUploadedLat) < 0.00003 &&
-      abs(longitude - lastUploadedLon) < 0.00003) {
+  // if (abs(latitude - lastUploadedLat) < 0.00003 &&
+  //     abs(longitude - lastUploadedLon) < 0.00003) {
 
-    Serial.println("🚌 Bus stationary - skipping upload");
+  //   Serial.println("🚌 Bus stationary - skipping upload");
 
-    uploadInProgress = false;
+  //   uploadInProgress = false;
 
-    return true;
-  }
+  //   return true;
+  // }
 
   String json = "{";
 
