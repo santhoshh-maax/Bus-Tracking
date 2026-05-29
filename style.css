@@ -49,31 +49,37 @@ html, body {
 /* 📱 Responsive Adaptive Rules for Mobile Screen Widths */
 @media (max-width: 600px) {
   .panel {
-    bottom: 0;
-    left: 0;
-    right: 0;
-    width: 100%;         /* Spans fully across the screen width */
-    max-height: 45vh;    /* Prevents the panel from drowning out the map graphic */
-    overflow-y: auto;    /* Enables scrolling within the panel if button counts expand */
-    border-radius: 16px 16px 0 0; /* Rounded edges only on top sides */
-    padding: 18px;       
-    font-size: 15px;     /* Much larger text size for instant reading while walking/driving */
-    line-height: 1.5;
-    box-shadow: 0 -4px 20px rgba(0,0,0,0.4);
+    bottom: 14px;
+    left: auto;
+    right: 14px;
+    width: 80%;
+    max-width: 250px;
+    max-height: 55vh;
+    overflow-y: auto;
+    border-radius: 14px;
+    padding: 10px;
+    font-size: 13px;
+    line-height: 1.35;
+    box-shadow: 0 6px 18px rgba(0,0,0,0.32);
+  }
+
+  .panel {
+    touch-action: none;
+    user-select: none;
   }
 
   .buttons {
     display: flex;
     flex-wrap: wrap;
     justify-content: space-between;
-    gap: 8px;            /* Even layout alignment spacing */
+    gap: 8px;
     margin-top: 10px;
   }
 
   .buttons button {
-    flex: 1 1 calc(33.33% - 8px); /* Forces buttons into neat rows of 3 on mobile layout views */
+    flex: 1 1 calc(33.33% - 8px);
     margin: 0 !important;
-    padding: 12px 8px !important; /* Larger touch footprint for easy tapping with thumbs */
+    padding: 12px 8px !important;
     font-size: 13px !important;
     font-weight: bold;
   }
