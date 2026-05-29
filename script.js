@@ -19,10 +19,10 @@ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
   attribution: "© OpenStreetMap"
 }).addTo(map);
 
-// 🚍 BUS ICON
+// 🚍 BUS ICON (small = professional look)
 var busIcon = L.icon({
   iconUrl: "bus.png",
-  iconSize: [40, 40],
+  iconSize: [28, 28],
   iconAnchor: [14, 14]
 });
 
@@ -33,16 +33,6 @@ var marker = L.marker([10, 78], {
 
 // 📍 ROUTE
 var route = L.polyline([], { color: 'blue', weight: 4 }).addTo(map);
-
-// 🔄 AUTOMATICALLY LOAD SAVED STOPS FROM FIREBASE ON INITIAL PAGE LOAD
-db.ref("stops").once("value", (snapshot) => {
-  if (snapshot.exists()) {
-    snapshot.forEach((childSnapshot) => {
-      const stop = childSnapshot.val();
-      createStopMarker(stop.lat, stop.lon, stop.stopName);
-    });
-  }
-});
 
 // 🔄 STATE
 let currentLatLng = null;
@@ -60,7 +50,6 @@ let lastUpdate = null;
 
 let tracking = true;
 let routePoints = [];
-let stopMarkers = [];
 
 let busStatus = "STOPPED";
 let moveScore = 0;
@@ -76,29 +65,35 @@ db.ref("gps").limitToLast(1).on("value", (snapshot) => {
 
   const key = Object.keys(data)[0];
   const val = data[key];
-
   let sim = val.sim || "UNKNOWN";
-  let net = val.net || "UNKNOWN";
-  let gps = val.gps || "WAITING";
+let net = val.net || "UNKNOWN";
+let gps = val.gps || "WAITING";
 
   let lat = val.lat;
   let lon = val.lon;
 
   if (!lat || !lon) return;
 
-  // 📡 UPDATE STATUS UI (FIXED)
-  document.getElementById("simStatus").innerHTML = "📡 SIM: " + sim;
-  document.getElementById("netStatus").innerHTML = "📶 NETWORK: " + net;
-  document.getElementById("gpsStatus").innerHTML = "📍 GPS: " + gps;
+  // ✅ ONLINE detection
+  let isNew = false;
 
-  document.getElementById("simStatus").style.color =
-    sim === "OK" ? "lime" : "red";
+  if (lastLat === null || lastLon === null) {
+    isNew = true;
+  } else if (
+    Math.abs(lat - lastLat) > 0.00001 ||
+    Math.abs(lon - lastLon) > 0.00001
+  ) {
+    isNew = true;
+  }
 
-  document.getElementById("netStatus").style.color =
-    net === "OK" ? "lime" : "red";
+  if (isNew) {
+    lastUpdate = Date.now();
+    lastLat = lat;
+    lastLon = lon;
+  }
 
-  document.getElementById("gpsStatus").style.color =
-    gps === "RECEIVED" ? "lime" : "orange";
+  // 🚍 animate bus
+  animateMarker(lat, lon);
 
   // 📏 Distance
   let dist = 0;
@@ -108,23 +103,18 @@ db.ref("gps").limitToLast(1).on("value", (snapshot) => {
     dist = getDistance(prevLat, prevLon, lat, lon);
   }
 
-  // 🚍 MOVE ONLY IF REAL MOVEMENT
-  if (dist > 0.005) {
-    animateMarker(lat, lon);
-  }
-
   // ⏱ Time
   let timeDiff = 0;
   if (lastUpdateTime != null) {
     timeDiff = (now - lastUpdateTime) / 1000;
   }
 
-  // 🚀 Speed
+  // 🚀 Speed (safe)
   if (timeDiff > 0.5) {
     speed = (dist / timeDiff) * 3600;
   }
 
-  // 🧠 MOVEMENT LOGIC
+  // 🧠 MOVEMENT LOGIC (combined)
   if (dist > 0.003 && speed > 5) {
     moveScore++;
   } else {
@@ -133,17 +123,21 @@ db.ref("gps").limitToLast(1).on("value", (snapshot) => {
 
   moveScore = Math.max(0, Math.min(moveScore, 5));
 
-  busStatus = moveScore >= 3 ? "MOVING" : "STOPPED";
+  if (moveScore >= 3) {
+    busStatus = "MOVING";
+  } else {
+    busStatus = "STOPPED";
+  }
 
   lastUpdateTime = now;
 
-  // 📍 ROUTE
+  // 📍 ROUTE (ignore noise)
   if (tracking && dist > 0.003) {
     route.addLatLng([lat, lon]);
     routePoints.push({ lat, lon });
   }
 
-  // 📊 UI
+  // 📊 Distance + Speed UI
   if (prevLat != null) {
     totalDistance += dist;
 
@@ -160,7 +154,7 @@ db.ref("gps").limitToLast(1).on("value", (snapshot) => {
   document.getElementById("distance").innerHTML =
     "📏 Distance: " + totalDistance.toFixed(3) + " km";
 
-  // 🚍 BUS STATUS
+  // 🚍 BUS STATUS UI (FIXED LOCATION)
   if (busStatus === "MOVING") {
     document.getElementById("busStatus").innerHTML = "🚍 MOVING";
     document.getElementById("busStatus").style.color = "lime";
@@ -168,9 +162,15 @@ db.ref("gps").limitToLast(1).on("value", (snapshot) => {
     document.getElementById("busStatus").innerHTML = "🛑 STOPPED";
     document.getElementById("busStatus").style.color = "red";
   }
+ document.getElementById("simStatus").style.color =
+  sim === "OK" ? "lime" : "red";
 
-  // 📡 ONLINE STATUS
-  lastUpdate = Date.now();
+document.getElementById("netStatus").style.color =
+  net === "OK" ? "lime" : "red";
+
+document.getElementById("gpsStatus").style.color =
+  gps === "RECEIVED" ? "lime" : "orange";
+
 });
 
 // 🔴 OFFLINE CHECK
@@ -188,7 +188,7 @@ setInterval(() => {
   }
 }, 3000);
 
-// 🚍 ANIMATION
+// 🚍 ANIMATION (fixed rotation)
 function animateMarker(newLat, newLon) {
 
   if (!currentLatLng) {
@@ -203,6 +203,8 @@ function animateMarker(newLat, newLon) {
 
   let lat1 = currentLatLng[0];
   let lon1 = currentLatLng[1];
+
+  let dist = getDistance(lat1, lon1, newLat, newLon);
 
   let latStep = (newLat - lat1) / steps;
   let lonStep = (newLon - lon1) / steps;
@@ -227,7 +229,9 @@ function animateMarker(newLat, newLon) {
 
     marker.setLatLng([lat, lon]);
 
-    marker.setRotationAngle(angle);
+    if (dist > 0.005) {
+      marker.setRotationAngle(angle);
+    }
 
     map.panTo([lat, lon]);
 
@@ -265,46 +269,6 @@ function startTracking() {
   route.setLatLngs([]);
   totalDistance = 0;
   alert("▶️ Tracking Started");
-}
-// ➕ ADD STOP FUNCTION
-function addStop() {
-  // Guard clause: Ensure we have actually received data points from the bus first
-  if (!prevLat || !prevLon) {
-    alert("⚠️ No GPS location available yet to mark a stop!");
-    return;
-  }
-
-  // Define stop payload structure
-  const stopData = {
-    lat: prevLat,
-    lon: prevLon,
-    timestamp: new Date().toString(),
-    stopName: "Stop " + (stopMarkers.length + 1)
-  };
-
-  // 1. Push payload into a clean "stops" child node in Firebase Real-time Database
-  db.ref("stops").push(stopData)
-    .then(() => {
-      // 2. Drop the visual pin point on the map array interface natively
-      createStopMarker(stopData.lat, stopData.lon, stopData.stopName);
-      alert(`📌 ${stopData.stopName} Saved Successfully!`);
-    })
-    .catch((error) => {
-      console.error("Firebase Stop Save Failure: ", error);
-      alert("❌ Database error. Could not save stop configuration.");
-    });
-}
-
-// Helper function to create a pin point on the map canvas
-function createStopMarker(lat, lon, label) {
-  // Use Leaflet's default red/blue pin layout and bind a popup to label it
-  let stopMarker = L.marker([lat, lon])
-    .addTo(map)
-    .bindPopup(`<b>${label}</b><br>Lat: ${lat.toFixed(6)}<br>Lon: ${lon.toFixed(6)}`)
-    .openPopup();
-
-  // Store marker instance in our global array context
-  stopMarkers.push(stopMarker);
 }
 
 function stopTracking() {
