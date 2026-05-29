@@ -1,0 +1,119 @@
+html, body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+.header {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.5);
+  color: white;
+  padding: 10px;
+  font-weight: bold;
+  text-align: center;
+  box-sizing: border-box;
+}
+
+#map {
+  height: 100vh;   /* FULL screen */
+  width: 100%;
+}
+
+/* 📦 Compact floating panel for Desktop/Laptop viewports */
+.panel {
+  position: absolute;
+  bottom: 20px;
+  right: 20px;
+
+  width: 300px;          /* Slightly wider on desktop for clean alignment */
+  padding: 15px;
+
+  background: rgba(0, 0, 0, 0.85);
+  color: white;
+
+  border-radius: 12px;
+  box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+
+  font-size: 14px;
+  line-height: 1.6;
+
+  z-index: 1000;
+  box-sizing: border-box;
+}
+
+/* 📱 Responsive Adaptive Rules for Mobile Screen Widths */
+@media (max-width: 600px) {
+  .panel {
+    bottom: 14px;
+    left: auto;
+    right: 14px;
+    width: 80%;
+    max-width: 250px;
+    max-height: 55vh;
+    overflow-y: auto;
+    border-radius: 14px;
+    padding: 10px;
+    font-size: 13px;
+    line-height: 1.35;
+    box-shadow: 0 6px 18px rgba(0,0,0,0.32);
+  }
+
+  .panel {
+    touch-action: none;
+    user-select: none;
+  }
+
+  .buttons {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 8px;
+    margin-top: 10px;
+  }
+
+  .buttons button {
+    flex: 1 1 calc(33.33% - 8px);
+    margin: 0 !important;
+    padding: 12px 8px !important;
+    font-size: 13px !important;
+    font-weight: bold;
+  }
+}
+
+/* 🕹️ Button Styling Defaults */
+.buttons {
+  margin-top: 12px;
+}
+
+.buttons button {
+  margin: 4px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  border: none;
+  cursor: pointer;
+  font-weight: bold;
+  transition: opacity 0.2s;
+}
+
+.buttons button:hover {
+  opacity: 0.9;
+}
+
+/* Target color maps aligned safely with button function arrays */
+button:nth-child(1){background:#2ecc71;color:white;} /* Start */
+button:nth-child(2){background:#e74c3c;color:white;} /* Stop */
+button:nth-child(3){background:#e67e22;color:white;} /* Add Stop */
+button:nth-child(4){background:#3498db;color:white;} /* Save */
+button:nth-child(5){background:#95a5a6;color:white;} /* Clear */
+button:nth-child(6){background:#9b59b6;color:white;} /* Load */
+
+#snapshots img {
+  width: 120px;
+  margin: 5px;
+  border-radius: 6px;
+}

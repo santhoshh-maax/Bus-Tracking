@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Bus Tracker</title>
+
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/leaflet-image/leaflet-image.js"></script>
+  <script src="https://unpkg.com/leaflet-rotatedmarker/leaflet.rotatedMarker.js"></script>
+
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+
+  <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+
+<div class="header">
+  Bus Tracker
+</div>
+
+<div id="map"></div>
+
+<div class="panel">
+  <div id="statusPanel">🔴 OFFLINE</div>
+  <div id="coords">Waiting for GPS...</div>
+  <div id="speed">Speed: 0 km/h</div>
+  <div id="distance">Distance: 0 km</div>
+  <div id="busStatus">🛑 STOPPED</div>
+  <!-- <div id="points">Points: 0</div>
+  <div id="time">Duration: 0 sec</div>
+  <div id="simStatus">📡 SIM: --</div>
+  <div id="netStatus">📶 NETWORK: --</div>
+  <div id="gpsStatus">📍 GPS: --</div>
+  <div id="signalStrength">📊 SIGNAL: --</div> -->
+
+  <div class="buttons">
+  <button onclick="startTracking()">▶️ Start</button>
+  <button onclick="stopTracking()">⏹ Stop</button>
+  <button onclick="addStop()" style="background-color: #e67e22;">➕ Add Stop</button>
+  <button onclick="saveRoute()">💾 Save</button>
+  <button onclick="clearRoute()">🧹 Clear</button>
+  <button onclick="loadRoutes()">📂 Load</button>
+</div>
+
+  <div id="snapshots"></div>
+</div>
+
+<script src="script.js"></script>
+
+</body>
+</html>
