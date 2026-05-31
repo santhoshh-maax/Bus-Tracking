@@ -1,0 +1,232 @@
+⚠️ USING LAST KNOWN GPS: 10.270205,78.755753
+>> AT+HTTPTERM [RESP]: AT+HTTPTERM
+ERROR
+
+>> AT+HTTPINIT [RESP]: AT+HTTPINIT
+OK
+
+>> AT+HTTPPARA="CID",1 [RESP]: AT+HTTPPARA="CID",1
+ERROR
+
+>> AT+HTTPPARA="URL","https://bus-tracking-eae81-default-rtdb.asia-southeast1.firebasedatabase.app/gps.json" [RESP]: AT+HTTPPARA="URL","https://bus-tracking-eae81-default-rtdb.asia-southeast1.firebasedatabase.app/gps.json"
+OK
+
+>> AT+HTTPPARA="CONTENT","application/json" [RESP]: AT+HTTPPARA="CONTENT","application/json"
+OK
+
+>> AT+HTTPDATA=90,10000 [RESP]: AT+HTTPDATA=90,10000
+DOWNLOAD
+
+{"lat":10.270205,"lon":78.755753,"sim":"OK","net":"OK","gps":"LAST_KNOWN","signal":"GOOD"}
+>> AT+HTTPACTION=1
+[ASYNC ACTION RESP]: 
+OK
+
+AT+HTTPACTION=1
+OK
+
++HTTPACTION: 1,200,
+>> AT+HTTPTERM [RESP]: 31
+AT+HTTPTERM
+OK
+
+✅ FIREBASE SUCCESS
+
+📍 LIVE GPS: 10.238990,78.752617
+>> AT+HTTPTERM [RESP]: 
+>> AT+HTTPINIT [RESP]: 
+*ATREADY: 1
+
+❌ HTTPINIT FAILED
+⚠️ Upload failed
+🔄 FULL INTERNET RECOVERY
+>> AT+HTTPTERM [RESP]: AT+HTTPTERM
+ERROR
+
+>> AT+NETCLOSE [RESP]: AT+NETCLOSE
++NETCLOSE: 2
+
+ERROR
+
+>> AT+CGATT=0 [RESP]: AT+CGATT=0
+OK
+
+>> AT+CGATT=1 [RESP]: 
++CPIN: READY
+
+SMS DONE
+
++CGEV: EPS PDN ACT 1
+AT+CGATT=1
+OK
+
+>> AT+NETOPEN [RESP]: AT+NETOPEN
+OK
+
+>> AT+HTTPTERM [RESP]: 
++NETOPEN: 0
+AT+HTTPTERM
+ERROR
+
+>> AT+HTTPINIT [RESP]: AT+HTTPINIT
+OK
+
+>> AT+HTTPPARA="CID",1 [RESP]: AT+HTTPPARA="CID",1
+ERROR
+
+✅ INTERNET RESTORED
+>> AT+HTTPTERM [RESP]: 
+PB DONE
+AT+HTTPTERM
+OK
+
+>> AT+HTTPINIT [RESP]: AT+HTTPINIT
+OK
+
+>> AT+HTTPPARA="CID",1 [RESP]: AT+HTTPPARA="CID",1
+ERROR
+
+>> AT+HTTPPARA="URL","https://bus-tracking-eae81-default-rtdb.asia-southeast1.firebasedatabase.app/gps.json" [RESP]: AT+HTTPPARA="URL","https://bus-tracking-eae81-default-rtdb.asia-southeast1.firebasedatabase.app/gps.json"
+OK
+
+>> AT+HTTPPARA="CONTENT","application/json" [RESP]: AT+HTTPPARA="CONTENT","application/json"
+OK
+
+>> AT+HTTPDATA=88,10000 [RESP]: AT+HTTPDATA=88,10000
+DOWNLOAD
+
+{"lat":10.238990,"lon":78.752617,"sim":"OK","net":"OK","gps":"RECEIVED","signal":"GOOD"}
+>> AT+HTTPACTION=1
+[ASYNC ACTION RESP]: 
+OK
+
+AT+HTTPACTION=1
+OK
+
++HTTPACTION: 1,200,
+>> AT+HTTPTERM [RESP]: 31
+AT+HTTPTERM
+OK
+
+✅ FIREBASE SUCCESS
+----------------------------------------
+>> AT+CPIN? [RESP]: AT+CPIN?
++CPIN: READY
+
+OK
+
+>> AT+CSQ [RESP]: AT+CSQ
++CSQ: 17,99
+
+OK
+
+📶 Signal: GOOD (17)
+>> AT+CREG? [RESP]: AT+CREG?
++CREG: 0,1
+
+OK
+
+⚠️ USING LAST KNOWN GPS: 10.238990,78.752617
+>> AT+HTTPTERM [RESP]: AT+HTTPTERM
+ERROR
+
+> AT+HTTPINIT [RESP]: AT+HTTPINIT
+OK
+
+>> AT+HTTPPARA="CID",1 [RESP]: AT+HTTPPARA="CID",1
+ERROR
+
+>> AT+HTTPPARA="URL","https://bus-tracking-eae81-default-rtdb.asia-southeast1.firebasedatabase.app/gps.json" [RESP]: AT+HTTPPARA="URL","https://bus-tracking-eae81-default-rtdb.asia-southeast1.firebasedatabase.app/gps.json"
+OK
+
+>> AT+HTTPPARA="CONTENT","application/json" [RESP]: AT+HTTPPARA="CONTENT","application/json"
+OK
+
+>> AT+HTTPDATA=90,10000 [RESP]: AT+HTTPDATA=90,10000
+DOWNLOAD
+
+{"lat":10.238990,"lon":78.752617,"sim":"OK","net":"OK","gps":"LAST_KNOWN","signal":"GOOD"}
+>> AT+HTTPACTION=1
+[ASYNC ACTION RESP]: 
+OK
+
+AT+HTTPACTION=1
+OK
+
++HTTPACTION: 1,200,
+>> AT+HTTPTERM [RESP]: 31
+AT+HTTPTERM
+OK
+
+✅ FIREBASE SUCCESS
+----------------------------------------
+>> AT+CPIN? [RESP]: AT+CPIN?
++CPIN: READY
+
+OK
+
+>> AT+CSQ [RESP]: AT+CSQ
++CSQ: 19,99
+
+OK
+
+📶 Signal: GOOD (19)
+>> AT+CREG? [RESP]: AT+CREG?
++CREG: 0,1
+
+OK
+
+⚠️ USING LAST KNOWN GPS: 10.238990,78.752617
+>> AT+HTTPTERM [RESP]: AT+HTTPTERM
+ERROR
+
+> AT+HTTPINIT [RESP]: AT+HTTPINIT
+OK
+
+>> AT+HTTPPARA="CID",1 [RESP]: AT+HTTPPARA="CID",1
+ERROR
+
+>> AT+HTTPPARA="URL","https://bus-tracking-eae81-default-rtdb.asia-southeast1.firebasedatabase.app/gps.json" [RESP]: AT+HTTPPARA="URL","https://bus-tracking-eae81-default-rtdb.asia-southeast1.firebasedatabase.app/gps.json"
+OK
+
+>> AT+HTTPPARA="CONTENT","application/json" [RESP]: AT+HTTPPARA="CONTENT","application/json"
+OK
+
+>> AT+HTTPDATA=90,10000 [RESP]: AT+HTTPDATA=90,10000
+DOWNLOAD
+
+{"lat":10.238990,"lon":78.752617,"sim":"OK","net":"OK","gps":"LAST_KNOWN","signal":"GOOD"}
+>> AT+HTTPACTION=1
+[ASYNC ACTION RESP]: 
+OK
+
+AT+HTTPACTION=1
+OK
+
++HTTPACTION: 1,200,
+>> AT+HTTPTERM [RESP]: 31
+AT+HTTPTERM
+OK
+
+✅ FIREBASE SUCCESS
+----------------------------------------
+>> AT+CPIN? [RESP]: AT+CPIN?
++CPIN: READY
+
+OK
+
+>> AT+CSQ [RESP]: AT+CSQ
++CSQ: 19,99
+
+OK
+
+📶 Signal: GOOD (19)
+>> AT+CREG? [RESP]: AT+CREG?
++CREG: 0,1
+
+OK
+
+⚠️ USING LAST KNOWN GPS: 10.238990,78.752617
+>> AT+HTTPTERM [RESP]: AT+HTTPTERM
+ERROR
+
