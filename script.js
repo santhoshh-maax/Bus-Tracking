@@ -23,7 +23,7 @@ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
 
 // 🚍 BUS ICON (small = professional look)
 var busIcon = L.icon({
-  iconUrl: "bus1.png",
+  iconUrl: "bus.png",
   iconSize: [50, 50],
   iconAnchor: [25, 25]
 });
@@ -36,11 +36,14 @@ const FALLBACK_LON = 78.643106;
 // 📍 ROUTE
 var route = L.polyline([], { color: 'blue', weight: 4 }).addTo(map);
 var stopMarkers = [];
+var stopPoints = [];
+// drawnRoutes holds polylines loaded from saved routes so we can clear them
+var drawnRoutes = [];
 
 // 🔄 STATE
 let currentLatLng = null;
 let animationInterval = null;
-let lastAngle = 0;
+// rotation removed: bus icon should remain stable
 
 let prevLat = null;
 let prevLon = null;
@@ -50,6 +53,9 @@ let lastLon = null;
 
 let totalDistance = 0;
 let lastUpdate = null;
+let firebaseConnected = false;
+let connectionEstablished = false;
+let skipInitialGpsSnapshot = true;
 
 let tracking = true;
 let routePoints = [];
@@ -167,6 +173,16 @@ function loadLastLocation() {
 
 loadLastLocation();
 
+// Firebase connection state monitor
+const connectedRef = db.ref('.info/connected');
+connectedRef.on('value', (snap) => {
+  firebaseConnected = !!snap.val();
+  if (firebaseConnected) {
+    connectionEstablished = true;
+  }
+  console.log("[DEBUG] .info/connected =>", firebaseConnected, "connectionEstablished:", connectionEstablished, new Date().toISOString());
+});
+
 // � Make the panel draggable on touch/mobile
 const panel = document.querySelector('.panel');
 let panelDrag = false;
@@ -206,7 +222,15 @@ if (panel) {
 // �🔥 FIREBASE LISTENER
 db.ref("gps").limitToLast(1).on("value", (snapshot) => {
 
+  // ignore the initial cached snapshot that Firebase provides immediately on connect
+  if (skipInitialGpsSnapshot) {
+    skipInitialGpsSnapshot = false;
+    console.log("[DEBUG] Ignoring initial cached gps snapshot");
+    return;
+  }
+
   const data = snapshot.val();
+  console.log("[DEBUG] gps.on value received:", data);
   if (!data) return;
 
   const parsed = parseGpsSnapshot(data);
@@ -247,6 +271,7 @@ db.ref("gps").limitToLast(1).on("value", (snapshot) => {
     lastUpdate = Date.now();
     lastLat = lat;
     lastLon = lon;
+    console.log("[DEBUG] lastUpdate set =>", new Date(lastUpdate).toISOString());
   }
 
   // 🚍 animate bus
@@ -271,22 +296,22 @@ db.ref("gps").limitToLast(1).on("value", (snapshot) => {
     speed = (dist / timeDiff) * 3600;
   }
 
-  // 🧠 MOVEMENT LOGIC (combined)
-  if (dist > 0.003 && speed > 5) {
-    moveScore++;
-  } else {
-    moveScore--;
-  }
+  // // 🧠 MOVEMENT LOGIC (combined)
+  // if (dist > 0.003 && speed > 5) {
+  //   moveScore++;
+  // } else {
+  //   moveScore--;
+  // }
 
-  moveScore = Math.max(0, Math.min(moveScore, 5));
+  // moveScore = Math.max(0, Math.min(moveScore, 5));
 
-  if (moveScore >= 3) {
-    busStatus = "MOVING";
-  } else {
-    busStatus = "STOPPED";
-  }
+  // if (moveScore >= 3) {
+  //   busStatus = "MOVING";
+  // } else {
+  //   busStatus = "STOPPED";
+  // }
 
-  lastUpdateTime = now;
+  // lastUpdateTime = now;
 
   // 📍 ROUTE (ignore noise)
   if (tracking && dist > 0.003) {
@@ -311,6 +336,8 @@ db.ref("gps").limitToLast(1).on("value", (snapshot) => {
   document.getElementById("distance").innerHTML =
     "📏 Distance: " + totalDistance.toFixed(3) + " km";
 
+  updateEta(lat, lon, speed);
+
   // 🚍 BUS STATUS UI (FIXED LOCATION)
   if (busStatus === "MOVING") {
     document.getElementById("busStatus").innerHTML = "🚍 MOVING";
@@ -332,16 +359,73 @@ document.getElementById("gpsStatus").style.color =
 
 // 🔴 OFFLINE CHECK
 setInterval(() => {
-  if (!lastUpdate) return;
+  console.log("[DEBUG] statusCheck => firebaseConnected:", firebaseConnected, "connectionEstablished:", connectionEstablished, "lastUpdate:", lastUpdate ? new Date(lastUpdate).toISOString() : null);
+  if (!firebaseConnected && !connectionEstablished) {
+    document.getElementById("statusPanel").innerHTML = "🔄 CONNECTING";
+    document.getElementById("statusPanel").style.color = "orange";
+    return;
+  }
+
+  if (!firebaseConnected) {
+    document.getElementById("statusPanel").innerHTML = "🔴 OFFLINE";
+    document.getElementById("statusPanel").style.color = "red";
+    document.getElementById("busStatus").innerHTML = "Bus Status: --";
+    document.getElementById("busStatus").style.color = "gray";
+    document.getElementById("speed").innerHTML = "Speed: --";
+    return;
+  }
+
+  if (!lastUpdate) {
+     console.log("[DEBUG] statusCheck => no lastUpdate, showing CONNECTING");
+    document.getElementById("statusPanel").innerHTML = "🔄 CONNECTING";
+    document.getElementById("statusPanel").style.color = "orange";
+    return;
+  }
 
   let diff = (Date.now() - lastUpdate) / 1000;
 
   if (diff > 15) {
+     console.log("[DEBUG] statusCheck => lastUpdate too old (", diff, "s), showing OFFLINE");
     document.getElementById("statusPanel").innerHTML = "🔴 OFFLINE";
     document.getElementById("statusPanel").style.color = "red";
+
+    // When offline, hide live bus status and speed
+    const busEl = document.getElementById("busStatus");
+    const speedEl = document.getElementById("speed");
+    if (busEl) {
+      busEl.innerHTML = "Bus Status: --";
+      busEl.style.color = "gray";
+    }
+    if (speedEl) {
+      speedEl.innerHTML = "Speed: --";
+    }
   } else {
+     console.log("[DEBUG] statusCheck => recent lastUpdate (", diff, "s), showing ONLINE");
     document.getElementById("statusPanel").innerHTML = "🟢 ONLINE";
     document.getElementById("statusPanel").style.color = "lime";
+
+    // Restore bus status and speed display when online
+    const busEl = document.getElementById("busStatus");
+    const speedEl = document.getElementById("speed");
+    if (busEl) {
+      if (busStatus === "MOVING") {
+        busEl.innerHTML = "🚍 MOVING";
+        busEl.style.color = "lime";
+      } else if (busStatus === "STOPPED") {
+        busEl.innerHTML = "🛑 STOPPED";
+        busEl.style.color = "red";
+      } else {
+        busEl.innerHTML = busStatus || "--";
+        busEl.style.color = "black";
+      }
+    }
+    if (speedEl) {
+      if (typeof speed === 'number' && isFinite(speed)) {
+        speedEl.innerHTML = "🚀 Speed: " + speed.toFixed(2) + " km/h";
+      } else {
+        speedEl.innerHTML = "Speed: --";
+      }
+    }
   }
 }, 3000);
 
@@ -351,8 +435,7 @@ function animateMarker(newLat, newLon) {
   if (!marker) {
     currentLatLng = [newLat, newLon];
     marker = L.marker(currentLatLng, {
-      icon: busIcon,
-      rotationAngle: 0
+      icon: busIcon
     }).addTo(map);
     map.setView(currentLatLng, 16);
     return;
@@ -376,14 +459,6 @@ function animateMarker(newLat, newLon) {
   let latStep = (newLat - lat1) / steps;
   let lonStep = (newLon - lon1) / steps;
 
-  let newAngle = getAngle(lat1, lon1, newLat, newLon);
-
-  let diff = newAngle - lastAngle;
-  if (diff > 180) diff -= 360;
-  if (diff < -180) diff += 360;
-
-  let angle = lastAngle + diff * 0.3;
-  lastAngle = angle;
 
   if (animationInterval) clearInterval(animationInterval);
 
@@ -396,9 +471,7 @@ function animateMarker(newLat, newLon) {
 
     marker.setLatLng([lat, lon]);
 
-    if (dist > 0.005) {
-      marker.setRotationAngle(angle);
-    }
+    // keep marker upright and non-rotating
 
     map.panTo([lat, lon]);
 
@@ -424,10 +497,48 @@ function getDistance(lat1, lon1, lat2, lon2) {
   return R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
 }
 
-// 🧭 ANGLE
-function getAngle(lat1, lon1, lat2, lon2) {
-  return Math.atan2(lon2 - lon1, lat2 - lat1) * (180 / Math.PI);
+function getClosestStop(lat, lon) {
+  if (stopPoints.length === 0) return null;
+  let closest = null;
+  let closestDist = Infinity;
+
+  for (const pt of stopPoints) {
+    const d = getDistance(lat, lon, pt.lat, pt.lon);
+    if (d < closestDist) {
+      closestDist = d;
+      closest = pt;
+    }
+  }
+
+  return closest ? { lat: closest.lat, lon: closest.lon, distanceKm: closestDist } : null;
 }
+
+function updateEta(lat, lon, speedKmh) {
+  const etaEl = document.getElementById("eta");
+  if (!etaEl) return;
+
+  const nextStop = getClosestStop(lat, lon);
+  if (!nextStop) {
+    etaEl.innerHTML = "ETA: --";
+    return;
+  }
+
+  if (!speedKmh || !isFinite(speedKmh) || speedKmh < 0.5) {
+    etaEl.innerHTML = "ETA: --";
+    return;
+  }
+
+  const minutes = (nextStop.distanceKm / speedKmh) * 60;
+  if (!isFinite(minutes) || minutes < 0) {
+    etaEl.innerHTML = "ETA: --";
+    return;
+  }
+
+  etaEl.innerHTML = `⏱ ETA: ${minutes.toFixed(1)} min`;
+}
+
+// 🧭 ANGLE
+// getAngle removed since rotation is disabled
 
 // 🎮 BUTTONS
 function startTracking() {
@@ -462,6 +573,7 @@ function addStop() {
   }).addTo(map);
 
   stopMarkers.push(stopMarker);
+  stopPoints.push({ lat: Number(lat), lon: Number(lon) });
 
   db.ref("points").push({
     timestamp: new Date().toISOString(),
@@ -479,10 +591,25 @@ function addStop() {
 }
 
 function clearRoute() {
+  // clear live route
   route.setLatLngs([]);
   routePoints = [];
   totalDistance = 0;
-  alert("🧹 Route Cleared");
+
+  // remove any drawn saved routes
+  try {
+    drawnRoutes.forEach(r => { if (r && map.hasLayer(r)) map.removeLayer(r); });
+  } catch (e) { /* ignore */ }
+  drawnRoutes = [];
+
+  // remove any stop/point markers
+  try {
+    stopMarkers.forEach(m => { if (m && map.hasLayer(m)) map.removeLayer(m); });
+  } catch (e) { /* ignore */ }
+  stopMarkers = [];
+  stopPoints = [];
+
+  alert("🧹 Route and Points Cleared");
 }
 
 function saveRoute() {
@@ -500,16 +627,48 @@ function saveRoute() {
 }
 
 function loadRoutes() {
+  // Clear any previously-loaded stop markers
+  try {
+    stopMarkers.forEach(m => { if (m && map.hasLayer(m)) map.removeLayer(m); });
+  } catch (e) { /* ignore */ }
+  stopMarkers = [];
+  stopPoints = [];
+
+  // Load saved routes first
   db.ref("routes").once("value", (snapshot) => {
     snapshot.forEach((child) => {
       let path = child.val().path;
 
-      L.polyline(
+      const poly = L.polyline(
         path.map(p => [p.lat, p.lon]),
         { color: "red" }
       ).addTo(map);
+      drawnRoutes.push(poly);
     });
 
-    alert("📂 Routes Loaded");
+    // After routes, load saved points and display them
+    db.ref("points").once("value", (ptsSnap) => {
+      ptsSnap.forEach((pt) => {
+        const val = pt.val();
+        if (!val || typeof val.lat === 'undefined' || typeof val.lon === 'undefined') return;
+        const m = L.circleMarker([Number(val.lat), Number(val.lon)], {
+          color: "orange",
+          fillColor: "#f39c12",
+          fillOpacity: 0.8,
+          radius: 8,
+          weight: 2
+        }).addTo(map);
+
+        let popupText = "📍 Point";
+        if (val.timestamp) popupText += " — " + val.timestamp;
+        if (val.message) popupText += "\n" + val.message;
+        m.bindPopup(popupText);
+
+              stopMarkers.push(m);
+        stopPoints.push({ lat: Number(val.lat), lon: Number(val.lon) });
+      });
+
+      alert("📂 Routes and Points Loaded");
+    });
   });
 }
