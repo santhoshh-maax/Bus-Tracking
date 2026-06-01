@@ -23,9 +23,9 @@ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
 
 // 🚍 BUS ICON (small = professional look)
 var busIcon = L.icon({
-  iconUrl: "bus.png",
-  iconSize: [28, 28],
-  iconAnchor: [14, 14]
+  iconUrl: "bus1.png",
+  iconSize: [34, 34],
+  iconAnchor: [17, 17]
 });
 
 var marker = null;
