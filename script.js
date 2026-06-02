@@ -25,7 +25,7 @@ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
 var busIcon = L.icon({
   iconUrl: "bus.png",
   iconSize: [50, 50],
-  iconAnchor: [25, 25]
+  iconAnchor: [14, 14]
 });
 
 var marker = null;
@@ -336,7 +336,9 @@ db.ref("gps").limitToLast(1).on("value", (snapshot) => {
   document.getElementById("distance").innerHTML =
     "📏 Distance: " + totalDistance.toFixed(3) + " km";
 
-  updateEta(lat, lon, speed);
+  // Update ETA based on movement status
+  const isMoving = speed > 0.5;
+  updateEta(lat, lon, speed, isMoving);
 
   // 🚍 BUS STATUS UI (FIXED LOCATION)
   if (busStatus === "MOVING") {
@@ -372,6 +374,7 @@ setInterval(() => {
     document.getElementById("busStatus").innerHTML = "Bus Status: --";
     document.getElementById("busStatus").style.color = "gray";
     document.getElementById("speed").innerHTML = "Speed: --";
+    document.getElementById("eta").innerHTML = "⏱ ETA: --";
     return;
   }
 
@@ -392,12 +395,16 @@ setInterval(() => {
     // When offline, hide live bus status and speed
     const busEl = document.getElementById("busStatus");
     const speedEl = document.getElementById("speed");
+    const etaEl = document.getElementById("eta");
     if (busEl) {
       busEl.innerHTML = "Bus Status: --";
       busEl.style.color = "gray";
     }
     if (speedEl) {
       speedEl.innerHTML = "Speed: --";
+    }
+    if (etaEl) {
+      etaEl.innerHTML = "⏱ ETA: --";
     }
   } else {
      console.log("[DEBUG] statusCheck => recent lastUpdate (", diff, "s), showing ONLINE");
@@ -497,6 +504,7 @@ function getDistance(lat1, lon1, lat2, lon2) {
   return R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
 }
 
+// 🎯 FIND CLOSEST STOP
 function getClosestStop(lat, lon) {
   if (stopPoints.length === 0) return null;
   let closest = null;
@@ -513,27 +521,33 @@ function getClosestStop(lat, lon) {
   return closest ? { lat: closest.lat, lon: closest.lon, distanceKm: closestDist } : null;
 }
 
-function updateEta(lat, lon, speedKmh) {
+// ⏱ UPDATE ETA
+function updateEta(lat, lon, speedKmh, isMoving) {
   const etaEl = document.getElementById("eta");
   if (!etaEl) return;
 
+  // Show -- when bus is STOPPED
+  if (!isMoving || speedKmh < 0.5) {
+    etaEl.innerHTML = "⏱ ETA: --";
+    return;
+  }
+
+  // Find next closest stop
   const nextStop = getClosestStop(lat, lon);
-  if (!nextStop) {
-    etaEl.innerHTML = "ETA: --";
+  if (!nextStop || nextStop.distanceKm === 0) {
+    etaEl.innerHTML = "⏱ ETA: --";
     return;
   }
 
-  if (!speedKmh || !isFinite(speedKmh) || speedKmh < 0.5) {
-    etaEl.innerHTML = "ETA: --";
-    return;
-  }
-
+  // Calculate time in minutes: (distance_km / speed_kmh) * 60
   const minutes = (nextStop.distanceKm / speedKmh) * 60;
+  
   if (!isFinite(minutes) || minutes < 0) {
-    etaEl.innerHTML = "ETA: --";
+    etaEl.innerHTML = "⏱ ETA: --";
     return;
   }
 
+  // Show ETA only when moving
   etaEl.innerHTML = `⏱ ETA: ${minutes.toFixed(1)} min`;
 }
 
@@ -664,7 +678,7 @@ function loadRoutes() {
         if (val.message) popupText += "\n" + val.message;
         m.bindPopup(popupText);
 
-              stopMarkers.push(m);
+        stopMarkers.push(m);
         stopPoints.push({ lat: Number(val.lat), lon: Number(val.lon) });
       });
 
