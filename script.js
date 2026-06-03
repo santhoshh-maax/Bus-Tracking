@@ -296,22 +296,22 @@ db.ref("gps").limitToLast(1).on("value", (snapshot) => {
     speed = (dist / timeDiff) * 3600;
   }
 
-  // // 🧠 MOVEMENT LOGIC (combined)
-  // if (dist > 0.003 && speed > 5) {
-  //   moveScore++;
-  // } else {
-  //   moveScore--;
-  // }
+  // 🧠 MOVEMENT LOGIC (combined with hysteresis)
+  if (dist > 0.003 && speed > 5) {
+    moveScore++;
+  } else {
+    moveScore--;
+  }
 
-  // moveScore = Math.max(0, Math.min(moveScore, 5));
+  moveScore = Math.max(0, Math.min(moveScore, 5));
 
-  // if (moveScore >= 3) {
-  //   busStatus = "MOVING";
-  // } else {
-  //   busStatus = "STOPPED";
-  // }
+  if (moveScore >= 3) {
+    busStatus = "MOVING";
+  } else {
+    busStatus = "STOPPED";
+  }
 
-  // lastUpdateTime = now;
+  lastUpdateTime = now;
 
   // 📍 ROUTE (ignore noise)
   if (tracking && dist > 0.003) {
@@ -337,7 +337,7 @@ db.ref("gps").limitToLast(1).on("value", (snapshot) => {
     "📏 Distance: " + totalDistance.toFixed(3) + " km";
 
   // Update ETA based on movement status
-  const isMoving = speed > 0.5;
+  const isMoving = busStatus === "MOVING";
   updateEta(lat, lon, speed, isMoving);
 
   // 🚍 BUS STATUS UI (FIXED LOCATION)
@@ -365,6 +365,7 @@ setInterval(() => {
   if (!firebaseConnected && !connectionEstablished) {
     document.getElementById("statusPanel").innerHTML = "🔄 CONNECTING";
     document.getElementById("statusPanel").style.color = "orange";
+    document.getElementById("eta").innerHTML = "⏱ ETA: --";
     return;
   }
 
@@ -382,12 +383,13 @@ setInterval(() => {
      console.log("[DEBUG] statusCheck => no lastUpdate, showing CONNECTING");
     document.getElementById("statusPanel").innerHTML = "🔄 CONNECTING";
     document.getElementById("statusPanel").style.color = "orange";
+    document.getElementById("eta").innerHTML = "⏱ ETA: --";
     return;
   }
 
   let diff = (Date.now() - lastUpdate) / 1000;
 
-  if (diff > 15) {
+  if (diff > 30) {
      console.log("[DEBUG] statusCheck => lastUpdate too old (", diff, "s), showing OFFLINE");
     document.getElementById("statusPanel").innerHTML = "🔴 OFFLINE";
     document.getElementById("statusPanel").style.color = "red";
@@ -526,12 +528,6 @@ function updateEta(lat, lon, speedKmh, isMoving) {
   const etaEl = document.getElementById("eta");
   if (!etaEl) return;
 
-  // Show -- when bus is STOPPED
-  if (!isMoving || speedKmh < 0.5) {
-    etaEl.innerHTML = "⏱ ETA: --";
-    return;
-  }
-
   // Find next closest stop
   const nextStop = getClosestStop(lat, lon);
   if (!nextStop || nextStop.distanceKm === 0) {
@@ -539,16 +535,24 @@ function updateEta(lat, lon, speedKmh, isMoving) {
     return;
   }
 
-  // Calculate time in minutes: (distance_km / speed_kmh) * 60
-  const minutes = (nextStop.distanceKm / speedKmh) * 60;
-  
-  if (!isFinite(minutes) || minutes < 0) {
-    etaEl.innerHTML = "⏱ ETA: --";
+  // When bus is MOVING - show actual ETA
+  if (isMoving && speedKmh > 0.5) {
+    const minutes = (nextStop.distanceKm / speedKmh) * 60;
+    if (isFinite(minutes) && minutes >= 0) {
+      etaEl.innerHTML = `⏱ ETA: ${minutes.toFixed(1)} min`;
+      return;
+    }
+  }
+
+  // When bus is STOPPED - show estimated ETA at 60 km/hr
+  const assumedSpeed = 60;
+  const estimatedMinutes = (nextStop.distanceKm / assumedSpeed) * 60;
+  if (isFinite(estimatedMinutes) && estimatedMinutes >= 0) {
+    etaEl.innerHTML = `⏱ ETA: ${estimatedMinutes.toFixed(1)} min (if 60km/hr)`;
     return;
   }
 
-  // Show ETA only when moving
-  etaEl.innerHTML = `⏱ ETA: ${minutes.toFixed(1)} min`;
+  etaEl.innerHTML = "⏱ ETA: --";
 }
 
 // 🧭 ANGLE

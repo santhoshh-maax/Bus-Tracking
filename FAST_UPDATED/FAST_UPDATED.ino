@@ -33,6 +33,7 @@ String sendAT(String cmd, int waitTime = 3000) {
       char c = Serial2.read();
       response += c;
     }
+    
     if (response.indexOf("OK") != -1 ||
         response.indexOf("ERROR") != -1 ||
         response.indexOf("DOWNLOAD") != -1 ||
