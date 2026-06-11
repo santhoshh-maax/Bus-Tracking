@@ -124,6 +124,7 @@ function loadLastLocation() {
       if (parsed?.lat && parsed?.lon) {
         console.log("Last saved location from localStorage:", parsed.lat, parsed.lon);
         animateMarker(parsed.lat, parsed.lon);
+        reverseGeocode(parsed.lat, parsed.lon);
         found = true;
       } else {
         console.log("No valid location found in localStorage.");
@@ -147,6 +148,7 @@ function loadLastLocation() {
         animateMarker(FALLBACK_LAT, FALLBACK_LON);
         document.getElementById("coords").innerHTML =
           `📍 Lat: ${FALLBACK_LAT.toFixed(6)} | Lon: ${FALLBACK_LON.toFixed(6)}`;
+        reverseGeocode(FALLBACK_LAT, FALLBACK_LON);
       }
       if (data && typeof data === 'object') {
         for (const key in data) {
@@ -159,6 +161,7 @@ function loadLastLocation() {
 
     console.log("Last location fetched from Firebase:", gps.lat, gps.lon, "(key:", gps.key || 'root', ")");
     animateMarker(gps.lat, gps.lon);
+    reverseGeocode(gps.lat, gps.lon);
     saveLastLocation(gps.lat, gps.lon);
   }).catch((error) => {
     console.warn("Firebase fetch failed", error);
@@ -332,6 +335,10 @@ db.ref("gps").limitToLast(1).on("value", (snapshot) => {
 
   document.getElementById("coords").innerHTML =
     `📍 Lat: ${lat.toFixed(6)} | Lon: ${lon.toFixed(6)}`;
+
+  if (isNew) {
+    reverseGeocode(lat, lon);
+  }
 
   document.getElementById("distance").innerHTML =
     "📏 Distance: " + totalDistance.toFixed(3) + " km";
@@ -689,4 +696,21 @@ function loadRoutes() {
       alert("📂 Routes and Points Loaded");
     });
   });
+}
+
+// Reverse geocode to human-readable name using Nominatim
+async function reverseGeocode(lat, lon) {
+  const el = document.getElementById('locationName');
+  if (!el) return;
+  try {
+    el.innerHTML = '🔎 Resolving...';
+    const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}&zoom=18&addressdetails=1`;
+    const res = await fetch(url, { headers: { 'Accept': 'application/json' } });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    el.innerHTML = data && data.display_name ? data.display_name : '📌 Location: --';
+  } catch (e) {
+    console.warn('Reverse geocode failed', e);
+    el.innerHTML = '📌 Location: --';
+  }
 }

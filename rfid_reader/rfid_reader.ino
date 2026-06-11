@@ -5,12 +5,12 @@
 // RC522 PINS
 // ==========================
 
-#define SS_PIN   15
-#define RST_PIN  5
+#define SS_PIN   41
+#define RST_PIN  38
 
-#define SCK_PIN  12
-#define MOSI_PIN 21
-#define MISO_PIN 13
+#define SCK_PIN  42
+#define MOSI_PIN 40
+#define MISO_PIN 39
 
 // ==========================
 // RFID OBJECT
