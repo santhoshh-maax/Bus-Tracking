@@ -82,11 +82,11 @@ void batteryAdcSweep() {
 
 // ---- identity: change these 6 lines to re-purpose this board ----
 const char *DEVICE_NAME = "gokart_cv";
-const char *FIREBASE_PATH = "/zion/gokart_cv/live.json";
+const char *FIREBASE_PATH = "/zion/gokart_cv/live";
 const char *FIREBASE_START_PATH = "/zion/gokart_cv/startPoint.json";
 const char *FIREBASE_RACE_PATH = "/zion/gokart_cv/race/";
 const char *FIREBASE_TRACK_PATH = "/zion/gokart_cv/track/";
-const char *FIREBASE_HISTORY_PATH = "/zion/gokart_cv/history/";
+const char *FIREBASE_HISTORY_PATH = "/zion/gokart_cv/history";
 // -----------------------------------------------------------------
 const float LAP_ENTER_RADIUS_M = 5.0;
 const float LAP_EXIT_RADIUS_M = 10.0;
@@ -161,12 +161,9 @@ unsigned long trackFlushAt = 0;
 const unsigned long TRACK_FLUSH_INTERVAL = 5000;  // minimum gap between batches
 const unsigned long TRACK_FLUSH_GAP = 500;        // spacing while draining
 // ---- Full-sample history ----
-// /live can only ever hold the newest sample: every cycle PUTs the same node, so
-// the value that was there a second ago is simply gone and the database keeps no
-// record of the route that was driven. This buffer holds whole samples and posts
-// them in batches under /history, which only ever adds children. Nothing is
-// overwritten, so every value the kart sends stays in the database and the whole
-// route can be traced afterwards.
+// /live holds only the newest sample. This buffer queues complete samples for
+// append-only writes under /history, where Firebase generates a unique child key
+// for every sample so old route data is never replaced.
 struct HistSample {
   unsigned long ms;                 // kart uptime, turned into UTC when flushed
   float lat, lon, speed;
@@ -177,23 +174,13 @@ struct HistSample {
   unsigned int queued;
   char gps[16], signal[16], sim[8], net[8];
 };
-// One request carries this many samples. Bigger batches mean fewer requests but
-// a longer blocking modem write, and the 1 Hz live cycle is the priority. The
-// ring is exactly one batch, so nothing is ever held beyond a single flush and
-// an outage costs at most HISTORY_BATCH samples of history.
-const unsigned int HISTORY_BATCH = 20;
-// Batch keys wrap, so a new batch overwrites the oldest one and the database
-// stops growing instead of swallowing the project. Retention is
-// BATCH * BATCHES samples: 20 * 90 = 1800 samples, about 30 minutes at 1 Hz.
-// Raise it to keep more of the day, and expect the dashboard to download more on
-// load, because it reads this node to draw the full route.
-const unsigned int HISTORY_BATCHES = 90;
+// Keep a short retry queue in RAM when Firebase is temporarily unavailable.
+const unsigned int HISTORY_BUFFER_CAPACITY = 20;
 const unsigned long HISTORY_FLUSH_MS = 20000;  // don't sit on a part-full batch
 const unsigned long HISTORY_FLUSH_GAP = 500;   // spacing while draining
-HistSample histRing[HISTORY_BATCH];
+HistSample histRing[HISTORY_BUFFER_CAPACITY];
 unsigned int histCount = 0;        // samples held right now
-unsigned long histSeq = 0;         // global counter, forms the sample keys
-unsigned int histBatchSeq = 0;     // wrapping batch key
+unsigned long histSeq = 0;         // successful samples saved this boot
 unsigned long histFlushAt = 0;
 unsigned long histDropped = 0;     // samples lost while the ring was full
 const char *MONTHS[12] = {"Jan","Feb","Mar","Apr","May","Jun",
@@ -659,11 +646,9 @@ void closeHttpSession() {
   sendAT("AT+HTTPTERM", 2000);
   httpSessionOpen = false;
 }
-// Every JSON write in this sketch goes through here: the live node, the lap
-// time, the offline track replay and the history batches all used to repeat this
-// same block of AT traffic, so a fix to one of them silently left the others
-// broken. POST plus x-http-method-override keeps this a simple request, which is
-// what the browser needs to avoid a CORS preflight.
+// Every JSON write uses this AT request. Fixed-value nodes add
+// x-http-method-override=PUT; live and history omit it so Firebase POST appends
+// a generated child instead of replacing an earlier reading.
 bool httpPutJson(const String &url, const String &body, unsigned long waitMs = 8000) {
   if (!openHttpSession()) return false;
   sendAT("AT+HTTPPARA=\"URL\",\"" + url + "\"", 5000);
@@ -850,7 +835,7 @@ String sampleFields(const HistSample &s, bool withTrackDropped = false) {
   return j;
 }
 void pushHistorySample(const HistSample &s) {
-  if (histCount == HISTORY_BATCH) {
+  if (histCount == HISTORY_BUFFER_CAPACITY) {
     // The link has been down longer than one batch. Dropping the newest is the
     // honest choice: the ring cannot grow, and a partial route beats none.
     histDropped++;
@@ -858,37 +843,44 @@ void pushHistorySample(const HistSample &s) {
   }
   histRing[histCount++] = s;
 }
-// Sample keys are a zero-padded global counter, so they sort chronologically as
-// text and stay unique for the life of the counter.
-String historyKey(unsigned long seq) {
-  char buf[16];
-  snprintf(buf, sizeof(buf), "%06lu", seq);
-  return String(buf);
+// Match the reference sketch's pushed-record shape while retaining this kart's
+// additional telemetry fields. The per-kart path identifies the device.
+String historyFields(const HistSample &s) {
+  String j = "\"name\":\"" + String(DEVICE_NAME) + "\"";
+  j += ",\"lat\":" + String(s.lat, 6);
+  j += ",\"lon\":" + String(s.lon, 6);
+  j += ",\"speed\":" + String(s.speed, 1);
+  if (s.haveSoc) {
+    j += ",\"soc\":" + String(s.soc, 1);
+    j += ",\"voltage\":" + String(s.volts, 2);
+  }
+  if (s.haveLap) {
+    j += ",\"lap\":" + String(s.lap);
+    j += ",\"lapElapsed\":" + String(s.lapElapsed, 2);
+  }
+  j += ",\"sim\":\"" + String(s.sim) + "\"";
+  j += ",\"net\":\"" + String(s.net) + "\"";
+  j += ",\"gps\":\"" + String(s.gps) + "\"";
+  j += ",\"signal\":\"" + String(s.signal) + "\"";
+  j += ",\"queued\":" + String(s.queued);
+  if (timeSynced) {
+    j += ",\"timestamp\":" + String((long long)s.ms + timeOffset);
+  }
+  return j;
 }
-// Publish the held samples as one JSON object of "<key>": {<sample>} pairs under
-// a single batch key. Firebase adds these children and leaves the rest of
-// /history alone, which is the whole difference from the live node: this write
-// cannot erase what is already stored. A failed flush keeps the samples and
-// reuses the same keys on the retry, so repeating it is safe.
+// POST each sample to /history. Without a PUT override Firebase assigns a fresh
+// push key, matching the append-per-reading behavior of FAST_UPDATED.ino.
 bool flushHistory() {
   if (histCount == 0) return true;
-  unsigned int n = histCount;
-  String body = "{";
-  for (unsigned int i = 0; i < n; i++) {
-    if (i) body += ",";
-    body += "\"" + historyKey(histSeq + i) + "\":{" +
-            sampleFields(histRing[i]) + "}";
-  }
-  body += "}";
+  String body = "{" + historyFields(histRing[0]) + "}";
   String url = String(FIREBASE_DB) + FIREBASE_HISTORY_PATH +
-    "h" + String(histBatchSeq) + ".json?auth=" +
-    FIREBASE_SECRET + "&x-http-method-override=PUT";
+    ".json?auth=" + FIREBASE_SECRET;
   if (!httpPutJson(url, body)) return false;
-  histSeq += n;
-  histCount = 0;
-  histBatchSeq = (histBatchSeq + 1) % HISTORY_BATCHES;
+  histSeq++;
+  for (unsigned int i = 1; i < histCount; i++) histRing[i - 1] = histRing[i];
+  histCount--;
   Serial.println(
-    "📚 HISTORY SAVED " + String(n) + " samples (seq " + String(histSeq) + ")"
+    "📚 HISTORY SAMPLE SAVED (total this boot " + String(histSeq) + ")"
   );
   return true;
 }
@@ -898,7 +890,7 @@ bool flushHistory() {
 // parked does not sit on its last samples.
 void serviceHistory() {
   if (histCount == 0) return;
-  if (histCount < HISTORY_BATCH && millis() - histFlushAt < HISTORY_FLUSH_MS) return;
+  if (histCount < HISTORY_BUFFER_CAPACITY && millis() - histFlushAt < HISTORY_FLUSH_MS) return;
   if (uploadInProgress) return;
   histFlushAt = millis();
   if (flushHistory()) {
@@ -913,8 +905,7 @@ bool uploadToFirebase(const HistSample &s) {
   uploadInProgress = true;
   String json = "{" + sampleFields(s, true) + "}";
   String url =
-  String(FIREBASE_DB) + FIREBASE_PATH + "?auth=" +
-  FIREBASE_SECRET + "&x-http-method-override=PUT";
+  String(FIREBASE_DB) + FIREBASE_PATH + ".json?auth=" + FIREBASE_SECRET;
   if (!httpPutJson(url, json)) {
     uploadInProgress = false;
     Serial.println("❌ FIREBASE FAILED");
@@ -1046,11 +1037,9 @@ void printTelemetry(float lat, float lon, bool freshFix, bool netUp,
 void printHistoryStatus() {
   Serial.println("──── HISTORY ────");
   Serial.println("  path     : " + String(FIREBASE_HISTORY_PATH));
-  Serial.println("  buffered : " + String(histCount) + " / " + String(HISTORY_BATCH));
-  Serial.println("  seq      : " + String(histSeq) + " (next sample key)");
-  Serial.println("  batch    : h" + String(histBatchSeq) + " of " + String(HISTORY_BATCHES));
-  Serial.println("  retained : ~" + String((unsigned long)HISTORY_BATCH * HISTORY_BATCHES) +
-                 " samples in the database");
+  Serial.println("  buffered : " + String(histCount) + " / " + String(HISTORY_BUFFER_CAPACITY));
+  Serial.println("  saved    : " + String(histSeq) + " this boot");
+  Serial.println("  retention: append-only (subject to Firebase storage quota)");
   Serial.println("  dropped  : " + String(histDropped) + " samples lost while the buffer was full");
   Serial.println("───────────────────");
 }

@@ -54,10 +54,8 @@ let hist = [], trail = [], sfPoint = null, prevLap = null, prevBest = null, lapS
 // /track once it reconnected. Merged into the trail so the driven line shows
 // the real path instead of jumping across the gap.
 let bufferedPath = [], trackSeen = {}, trackPollAt = 0;
-// Every sample the kart has ever sent, as posted to /history. /live can only
-// hold the newest one, so this node is what makes the whole driven route
-// visible instead of just the last few seconds. The kart wraps its batch keys,
-// so the tree self-limits; histPath is only the derived polyline.
+// Samples are appended under both /live and /history. Keep the full-history
+// polyline derived from Firebase rather than duplicating the data in memory.
 const HISTORY_DRAW_MAX = 6000;   // cap so a long day cannot stall the canvas
 let histPath = [], histDirty = false;
 let tempLevel = {};
@@ -154,9 +152,36 @@ function applyAt(path, data, silent){
   if (!silent) onData();
 }
 
+function latestLive(){
+  const live = root.live;
+  if (!live || typeof live !== 'object') return {};
+  const records = Object.entries(live).filter(([, value]) =>
+    value && typeof value === 'object' &&
+    (isNum(value.latitude) || isNum(value.lat)) &&
+    (isNum(value.longitude) || isNum(value.lon))
+  );
+  if (records.length) {
+    records.sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
+    const value = records[records.length - 1][1];
+    return {
+      ...value,
+      latitude: isNum(value.latitude) ? value.latitude : value.lat,
+      longitude: isNum(value.longitude) ? value.longitude : value.lon
+    };
+  }
+  if (isNum(live.latitude) || isNum(live.lat)) {
+    return {
+      ...live,
+      latitude: isNum(live.latitude) ? live.latitude : live.lat,
+      longitude: isNum(live.longitude) ? live.longitude : live.lon
+    };
+  }
+  return {};
+}
+
 function onData(){
   const now = performance.now();
-  const L = root.live;
+  const L = latestLive();
   if (typeof L.name === 'string' && L.name.trim()) $('#kartName').textContent = L.name.trim();
   // Liveness is measured purely on ARRIVAL time of a real /live push. The kart's
   // own timestamp is synced once via AT+HTTPHEAD and then drifts, so letting it
@@ -181,7 +206,7 @@ function onData(){
     }
   } else if (!noFixWarned && Object.keys(L).length) {
     noFixWarned = true;                       // data arriving, but not as latitude/longitude
-    log('Kart data arrived without latitude/longitude at ' + kartPath() + '/live. If the kart is POSTing instead of PUTting, Firebase creates timestamp-keyed children instead of one live record.', 'bad');
+    log('Kart data arrived without coordinates at ' + kartPath() + '/live. Check the ESP32 telemetry payload.', 'bad');
   }
   const power = isNum(L.power) ? L.power : (isNum(L.voltage) && isNum(L.current) ? L.voltage * L.current / 1000 : null);
   const t = Date.now();
@@ -198,7 +223,7 @@ function scheduleRender(){
   requestAnimationFrame(() => {
     rafPending = false;
     renderReadouts();
-    renderConn(root.live);
+    renderConn(latestLive());
     renderLaps();
     renderSession();
     renderStartPoint();
@@ -208,7 +233,7 @@ function scheduleRender(){
 }
 
 function renderReadouts(){
-  const L = root.live;
+  const L = latestLive();
   $('#speed').textContent = isNum(L.speed) ? Math.round(L.speed) : '0';
   const gv = $('#gVal');
   if (page === 'cv') {                               // CV: the arc shows speed, bottom line shows top speed
@@ -265,8 +290,8 @@ const CONN_TEXT = { RECEIVED:'Fix', LAST_KNOWN:'Last known', WAITING:'Searching'
 let connPrev = {};
 
 // Single source of truth for "is the kart talking right now". The Firebase
-// /live node keeps its last payload forever, so reading it without this gate
-// makes a dead kart look perfectly healthy. Same 10 s window as the status pill.
+// Firebase retains pushed /live samples after the kart stops, so use arrival
+// time rather than stored data to decide whether telemetry is fresh.
 function kartIsLive(){
   if (cfg.source === 'demo') return true;
   if (conn.state === 'error') return false;
@@ -442,30 +467,39 @@ function emptyMsg(ctx, w, h, text){
 }
 
 /* ---------- retained sample history (everything the kart posted to /history) ---------- */
-// Derived from the tree on demand rather than appended to, because the kart
-// reuses a batch key once its retention window wraps: the re-used key replaces
-// the batch it held, and the drawn line has to follow that instead of doubling up.
+// Accept both one-record push children and the older batch-of-records shape.
 function rebuildHistoryPath(){
   histDirty = false;
   histPath = [];
   const H = root.history;
   if (!H || typeof H !== 'object') return;
   const rows = [];
-  for (const batch of Object.values(H)) {
-    if (!batch || typeof batch !== 'object') continue;
-    for (const [key, s] of Object.entries(batch)) {
-      if (!s || typeof s !== 'object') continue;
-      if (!isNum(s.latitude) || !isNum(s.longitude)) continue;
-      if (s.latitude === 0 && s.longitude === 0) continue;
-      const k = isNum(+key) ? +key : 0;
-      // timestamp is UTC and stays meaningful across a kart restart, so it is
-      // what orders the samples. The counter key is the fallback for the few
-      // captured before the clock was ever synced.
-      rows.push({ t: isNum(s.timestamp) ? s.timestamp : k, k, p: [s.latitude, s.longitude] });
+  const addSample = (groupKey, key, sample) => {
+    if (!sample || typeof sample !== 'object') return;
+    const latitude = isNum(sample.latitude) ? sample.latitude : sample.lat;
+    const longitude = isNum(sample.longitude) ? sample.longitude : sample.lon;
+    if (!isNum(latitude) || !isNum(longitude) || (latitude === 0 && longitude === 0)) return;
+    rows.push({
+      t: isNum(sample.timestamp) ? sample.timestamp : null,
+      k: `${groupKey}/${key}`,
+      p: [latitude, longitude]
+    });
+  };
+  for (const [groupKey, value] of Object.entries(H)) {
+    if (!value || typeof value !== 'object') continue;
+    if (isNum(value.lat) || isNum(value.latitude)) {
+      addSample(groupKey, groupKey, value);
+      continue;
     }
+    for (const [key, sample] of Object.entries(value)) addSample(groupKey, key, sample);
   }
   if (rows.length < 2) return;
-  rows.sort((a, b) => a.t - b.t || a.k - b.k);
+  rows.sort((a, b) => {
+    if (a.t !== null && b.t !== null) return a.t - b.t || a.k.localeCompare(b.k);
+    if (a.t !== null) return 1;
+    if (b.t !== null) return -1;
+    return a.k.localeCompare(b.k, undefined, { numeric:true });
+  });
   for (const r of (rows.length > HISTORY_DRAW_MAX ? rows.slice(-HISTORY_DRAW_MAX) : rows)) histPath.push(r.p);
 }
 
@@ -642,7 +676,7 @@ function renderStartPoint(){
 }
 async function setStartPoint(){
   const btn = $('#setStartBtn');
-  const live = root.live;
+  const live = latestLive();
   if (!isNum(live.latitude) || !isNum(live.longitude)) {
     log('No GPS fix yet, so there is no position to store. Wait for the kart to report a location.', 'warn');
     return;
@@ -693,7 +727,8 @@ function markTrackSeen(){
       // Drop stale keys so a long-running page does not grow without bound.
       const keys = Object.keys(trackSeen);
       if (keys.length > 120) for (const k of keys.slice(0, keys.length - 120)) delete trackSeen[k];
-      const q = isNum(root.live.queued) ? root.live.queued : 0;
+      const live = latestLive();
+      const q = isNum(live.queued) ? live.queued : 0;
       log(`${added} buffered position(s) replayed from the kart${q ? `, ${q} still queued on board` : ''}.`, 'good');
       drawMap();
     })
@@ -733,7 +768,7 @@ setInterval(() => {
     else setStatus('offline', `Offline — no data for ${Math.round(age)} s`);
     // Re-render the connection panel on the tick so the placeholders appear and
     // disappear with the liveness window, not only when fresh data arrives.
-    renderConn(root.live);
+    renderConn(latestLive());
 }, 100);
 
 /* ---------- sign-in (Firebase Authentication REST API) ---------- */
@@ -865,7 +900,7 @@ function resetSession(){
   renderSession.last = undefined;
   resetOsm();
   $('#lapNo').textContent = '–'; $('#lapNow').textContent = '0:00.0';
-  renderReadouts(); renderConn(root.live); renderLaps(); renderSession(); drawMap(); drawTrend();
+  renderReadouts(); renderConn(latestLive()); renderLaps(); renderSession(); drawMap(); drawTrend();
 }
 
 function connect(reset = true){
@@ -1010,7 +1045,7 @@ $('#sessionBtn').addEventListener('click', () => {
 });
 startDlg.addEventListener('close', async () => {
   if (startDlg.returnValue !== 'start') return;
-  const L = root.live;
+  const L = latestLive();
   const name = $('#startForm').name.value.trim() || `Session ${new Date().toLocaleDateString()}`;
   try {
     await dbWrite('PUT', 'session', {
