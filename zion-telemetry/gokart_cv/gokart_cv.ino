@@ -80,12 +80,13 @@ void batteryAdcSweep() {
   Serial.println("--------------------------------------------------");
 }
 
-// ---- identity: change these 4 lines to re-purpose this board ----
+// ---- identity: change these 6 lines to re-purpose this board ----
 const char *DEVICE_NAME = "gokart_cv";
 const char *FIREBASE_PATH = "/zion/gokart_cv/live.json";
 const char *FIREBASE_START_PATH = "/zion/gokart_cv/startPoint.json";
 const char *FIREBASE_RACE_PATH = "/zion/gokart_cv/race/";
 const char *FIREBASE_TRACK_PATH = "/zion/gokart_cv/track/";
+const char *FIREBASE_HISTORY_PATH = "/zion/gokart_cv/history/";
 // -----------------------------------------------------------------
 const float LAP_ENTER_RADIUS_M = 5.0;
 const float LAP_EXIT_RADIUS_M = 10.0;
@@ -159,6 +160,42 @@ unsigned long trackLastCycle = 0;   // guards against storing one point twice
 unsigned long trackFlushAt = 0;
 const unsigned long TRACK_FLUSH_INTERVAL = 5000;  // minimum gap between batches
 const unsigned long TRACK_FLUSH_GAP = 500;        // spacing while draining
+// ---- Full-sample history ----
+// /live can only ever hold the newest sample: every cycle PUTs the same node, so
+// the value that was there a second ago is simply gone and the database keeps no
+// record of the route that was driven. This buffer holds whole samples and posts
+// them in batches under /history, which only ever adds children. Nothing is
+// overwritten, so every value the kart sends stays in the database and the whole
+// route can be traced afterwards.
+struct HistSample {
+  unsigned long ms;                 // kart uptime, turned into UTC when flushed
+  float lat, lon, speed;
+  float soc, volts;
+  float lapElapsed;
+  int lap;
+  bool haveSoc, haveLap;
+  unsigned int queued;
+  char gps[16], signal[16], sim[8], net[8];
+};
+// One request carries this many samples. Bigger batches mean fewer requests but
+// a longer blocking modem write, and the 1 Hz live cycle is the priority. The
+// ring is exactly one batch, so nothing is ever held beyond a single flush and
+// an outage costs at most HISTORY_BATCH samples of history.
+const unsigned int HISTORY_BATCH = 20;
+// Batch keys wrap, so a new batch overwrites the oldest one and the database
+// stops growing instead of swallowing the project. Retention is
+// BATCH * BATCHES samples: 20 * 90 = 1800 samples, about 30 minutes at 1 Hz.
+// Raise it to keep more of the day, and expect the dashboard to download more on
+// load, because it reads this node to draw the full route.
+const unsigned int HISTORY_BATCHES = 90;
+const unsigned long HISTORY_FLUSH_MS = 20000;  // don't sit on a part-full batch
+const unsigned long HISTORY_FLUSH_GAP = 500;   // spacing while draining
+HistSample histRing[HISTORY_BATCH];
+unsigned int histCount = 0;        // samples held right now
+unsigned long histSeq = 0;         // global counter, forms the sample keys
+unsigned int histBatchSeq = 0;     // wrapping batch key
+unsigned long histFlushAt = 0;
+unsigned long histDropped = 0;     // samples lost while the ring was full
 const char *MONTHS[12] = {"Jan","Feb","Mar","Apr","May","Jun",
                          "Jul","Aug","Sep","Oct","Nov","Dec"};
 // Drain stale URCs before sending a command. Waiting a fixed 300 ms every time
@@ -622,6 +659,64 @@ void closeHttpSession() {
   sendAT("AT+HTTPTERM", 2000);
   httpSessionOpen = false;
 }
+// Every JSON write in this sketch goes through here: the live node, the lap
+// time, the offline track replay and the history batches all used to repeat this
+// same block of AT traffic, so a fix to one of them silently left the others
+// broken. POST plus x-http-method-override keeps this a simple request, which is
+// what the browser needs to avoid a CORS preflight.
+bool httpPutJson(const String &url, const String &body, unsigned long waitMs = 8000) {
+  if (!openHttpSession()) return false;
+  sendAT("AT+HTTPPARA=\"URL\",\"" + url + "\"", 5000);
+  sendAT("AT+HTTPPARA=\"CONTENT\",\"application/json\"", 3000);
+  String dataResp = sendAT(
+    "AT+HTTPDATA=" + String(body.length()) + ",15000", 5000
+  );
+  if (dataResp.indexOf("DOWNLOAD") == -1) {
+    Serial.println("❌ HTTPDATA FAILED");
+    closeHttpSession();
+    return false;
+  }
+  delay(100);
+  MODEM_UART.print(body);
+  // Wait for the modem to consume the payload. Polling for the echoed prompt
+  // response is far quicker than a fixed sleep, but fall back to a short grace
+  // period so a silent modem cannot stall the cycle.
+  unsigned long sentAt = millis();
+  while (millis() - sentAt < 400 && MODEM_UART.available()) {
+    MODEM_UART.read();
+  }
+  delay(150);
+  MODEM_UART.println();
+  MODEM_UART.println("AT+HTTPACTION=1");
+  String actionResult = "";
+  bool ok = false;
+  unsigned long startWait = millis();
+  while (millis() - startWait < waitMs) {
+    while (MODEM_UART.available()) {
+      char c = MODEM_UART.read();
+      actionResult += c;
+      if (actionResult.indexOf(",200,") != -1 ||
+          actionResult.indexOf(",201,") != -1) {
+        ok = true;
+        break;
+      }
+      if (actionResult.indexOf(",40") != -1 ||
+          actionResult.indexOf(",50") != -1) {
+        break;
+      }
+    }
+    if (ok) break;
+  }
+  if (ok) {
+    clearSerialBuffer();
+    return true;
+  }
+  // The error body lives in the session, so it has to be read BEFORE the session
+  // is terminated. Reading it afterwards always returns empty.
+  printHttpError();
+  closeHttpSession();
+  return false;
+}
 
 // Store one position in the ring. Oldest data is overwritten when full, so a
 // long outage degrades to "the last few minutes" rather than losing everything.
@@ -669,43 +764,9 @@ bool flushTrackQueue() {
   String url = String(FIREBASE_DB) + FIREBASE_TRACK_PATH +
     "b" + String(trackBatchSeq) + ".json?auth=" +
     FIREBASE_SECRET + "&x-http-method-override=PUT";
-  if (!openHttpSession()) return false;
-  sendAT("AT+HTTPPARA=\"URL\",\"" + url + "\"", 5000);
-  sendAT("AT+HTTPPARA=\"CONTENT\",\"application/json\"", 3000);
-  String dataResp = sendAT(
-    "AT+HTTPDATA=" + String(body.length()) + ",15000", 5000
-  );
-  if (dataResp.indexOf("DOWNLOAD") == -1) {
-    Serial.println("❌ TRACK FLUSH: HTTPDATA FAILED");
-    closeHttpSession();
-    return false;
-  }
-  delay(100);
-  MODEM_UART.print(body);
-  unsigned long sent = millis();
-  while (millis() - sent < 400 && MODEM_UART.available()) MODEM_UART.read();
-  delay(150);
-  MODEM_UART.println();
-  MODEM_UART.println("AT+HTTPACTION=1");
-  unsigned long waitStart = millis();
-  String actionResult = "";
-  bool ok = false;
-  while (millis() - waitStart < 8000) {
-    while (MODEM_UART.available()) {
-      char c = MODEM_UART.read();
-      actionResult += c;
-      if (actionResult.indexOf(",200,") != -1 ||
-          actionResult.indexOf(",201,") != -1) { ok = true; break; }
-      if (actionResult.indexOf(",40") != -1 ||
-          actionResult.indexOf(",50") != -1) break;
-    }
-    if (ok) break;
-  }
-  if (!ok) {
-    printHttpError();
-    closeHttpSession();
-    return false;
-  }
+  // Same wrapping-key trick as the history: the key the oldest batch used gets
+  // reused, so the node stops growing rather than accumulating forever.
+  if (!httpPutJson(url, body)) return false;
   for (unsigned int i = 0; i < n; i++) clearTrackPoint();
   trackBatchSeq = (trackBatchSeq + 1) % TRACK_MAX_BATCHES;
   Serial.println(
@@ -733,165 +794,154 @@ void serviceTrackFlush() {
     trackFlushAt = millis() - TRACK_FLUSH_INTERVAL + TRACK_FLUSH_GAP;
   }
 }
-bool uploadToFirebase(float latitude, float longitude) {
+// Take a snapshot of everything this cycle reports. Called once per cycle, after
+// the lap zone has been updated, so the live node and the history record can
+// never disagree about the same instant.
+void captureSample(HistSample &s, float lat, float lon) {
+  s.ms = millis();
+  s.lat = lat;
+  s.lon = lon;
+  s.speed = speedKmh;
+  s.haveSoc = batteryPct >= 0.0;
+  s.soc = batteryPct;
+  s.volts = batteryVolts;
+  s.haveLap = startPointKnown && lapCount > 0;
+  s.lap = lapCount;
+  s.lapElapsed = (float)(millis() - lapStartTime) / 1000.0;
+  s.queued = trackCount;
+  strncpy(s.gps, gpsStatus.c_str(), sizeof(s.gps) - 1); s.gps[sizeof(s.gps) - 1] = 0;
+  strncpy(s.signal, signalStrengthStr.c_str(), sizeof(s.signal) - 1); s.signal[sizeof(s.signal) - 1] = 0;
+  strncpy(s.sim, simStatus.c_str(), sizeof(s.sim) - 1); s.sim[sizeof(s.sim) - 1] = 0;
+  strncpy(s.net, netStatus.c_str(), sizeof(s.net) - 1); s.net[sizeof(s.net) - 1] = 0;
+}
+// Render one sample's fields, without the enclosing braces. Both the live node
+// and the history batches are built from this, so a value added to the payload
+// cannot be forgotten in one of the two places.
+//
+// withTrackDropped appends the count of positions lost from the offline track
+// ring. It is deliberately left out of history: that counter keeps running after
+// the sample was taken, so stamping its later value onto an older sample would
+// be wrong.
+String sampleFields(const HistSample &s, bool withTrackDropped = false) {
+  String j = "\"name\":\"" + String(DEVICE_NAME) + "\"";
+  j += ",\"latitude\":" + String(s.lat, 6);
+  j += ",\"longitude\":" + String(s.lon, 6);
+  j += ",\"speed\":" + String(s.speed, 1);
+  if (s.haveSoc) {
+    j += ",\"soc\":" + String(s.soc, 1);
+    j += ",\"voltage\":" + String(s.volts, 2);
+  }
+  if (s.haveLap) {
+    j += ",\"lap\":" + String(s.lap);
+    j += ",\"lapElapsed\":" + String(s.lapElapsed, 2);
+  }
+  j += ",\"sim\":\"" + String(s.sim) + "\"";
+  j += ",\"net\":\"" + String(s.net) + "\"";
+  j += ",\"gps\":\"" + String(s.gps) + "\"";
+  j += ",\"signal\":\"" + String(s.signal) + "\"";
+  // Let the dashboard show that positions are held on the kart and not lost.
+  j += ",\"queued\":" + String(s.queued);
+  if (withTrackDropped && trackDropped) {
+    j += ",\"dropped\":" + String(trackDropped);
+  }
+  if (timeSynced) {
+    j += ",\"timestamp\":" + String((long long)s.ms + timeOffset);
+  }
+  return j;
+}
+void pushHistorySample(const HistSample &s) {
+  if (histCount == HISTORY_BATCH) {
+    // The link has been down longer than one batch. Dropping the newest is the
+    // honest choice: the ring cannot grow, and a partial route beats none.
+    histDropped++;
+    return;
+  }
+  histRing[histCount++] = s;
+}
+// Sample keys are a zero-padded global counter, so they sort chronologically as
+// text and stay unique for the life of the counter.
+String historyKey(unsigned long seq) {
+  char buf[16];
+  snprintf(buf, sizeof(buf), "%06lu", seq);
+  return String(buf);
+}
+// Publish the held samples as one JSON object of "<key>": {<sample>} pairs under
+// a single batch key. Firebase adds these children and leaves the rest of
+// /history alone, which is the whole difference from the live node: this write
+// cannot erase what is already stored. A failed flush keeps the samples and
+// reuses the same keys on the retry, so repeating it is safe.
+bool flushHistory() {
+  if (histCount == 0) return true;
+  unsigned int n = histCount;
+  String body = "{";
+  for (unsigned int i = 0; i < n; i++) {
+    if (i) body += ",";
+    body += "\"" + historyKey(histSeq + i) + "\":{" +
+            sampleFields(histRing[i]) + "}";
+  }
+  body += "}";
+  String url = String(FIREBASE_DB) + FIREBASE_HISTORY_PATH +
+    "h" + String(histBatchSeq) + ".json?auth=" +
+    FIREBASE_SECRET + "&x-http-method-override=PUT";
+  if (!httpPutJson(url, body)) return false;
+  histSeq += n;
+  histCount = 0;
+  histBatchSeq = (histBatchSeq + 1) % HISTORY_BATCHES;
+  Serial.println(
+    "📚 HISTORY SAVED " + String(n) + " samples (seq " + String(histSeq) + ")"
+  );
+  return true;
+}
+// Drain the history buffer, at most one batch per cycle and never more often
+// than HISTORY_FLUSH_MS, so a full batch cannot starve the live telemetry. A
+// part-full batch is still sent once the interval passes, so a kart that is
+// parked does not sit on its last samples.
+void serviceHistory() {
+  if (histCount == 0) return;
+  if (histCount < HISTORY_BATCH && millis() - histFlushAt < HISTORY_FLUSH_MS) return;
+  if (uploadInProgress) return;
+  histFlushAt = millis();
+  if (flushHistory()) {
+    histFlushAt = millis() - HISTORY_FLUSH_MS + HISTORY_FLUSH_GAP;
+  }
+}
+bool uploadToFirebase(const HistSample &s) {
   if (uploadInProgress) {
     Serial.println("⚠️ Previous upload still active");
    return false;
   }
   uploadInProgress = true;
-  String json = "{";
-  json += "\"name\":\"" + String(DEVICE_NAME) + "\"";
-  json += ",\"latitude\":" + String(latitude, 6) + ",";
-  json += "\"longitude\":" + String(longitude, 6);
-  json += ",\"speed\":" + String(speedKmh, 1);
-  if (batteryPct >= 0.0) {
-    json += ",\"soc\":" + String(batteryPct, 1);
-    json += ",\"voltage\":" + String(batteryVolts, 2);
-  }
-  if (timeSynced) {
-    json += ",\"timestamp\":" +
-      String((long long)millis() + timeOffset);
-  }
-  if (startPointKnown && lapCount > 0) {
-    json += ",\"lap\":" + String(lapCount);
-    json += ",\"lapElapsed\":" +
-      String((float)(millis() - lapStartTime) / 1000.0, 2);
-  }
-  json += ",\"sim\":\"" + simStatus + "\"";
-  json += ",\"net\":\"" + netStatus + "\"";
-  json += ",\"gps\":\"" + gpsStatus + "\"";
-  json += ",\"signal\":\"" + signalStrengthStr + "\"";
-  // Let the dashboard show that positions are held on the kart and not lost.
-  json += ",\"queued\":" + String(trackCount);
-  if (trackDropped) json += ",\"dropped\":" + String(trackDropped);
-  json += "}";
+  String json = "{" + sampleFields(s, true) + "}";
   String url =
   String(FIREBASE_DB) + FIREBASE_PATH + "?auth=" +
   FIREBASE_SECRET + "&x-http-method-override=PUT";
-  if (!openHttpSession()) {
+  if (!httpPutJson(url, json)) {
     uploadInProgress = false;
+    Serial.println("❌ FIREBASE FAILED");
     return false;
   }
-  sendAT(
-    "AT+HTTPPARA=\"URL\",\"" + url + "\"",
-    5000
-  );
-  sendAT(
-    "AT+HTTPPARA=\"CONTENT\",\"application/json\"",
-    3000
-  );
-  String dataCmd =
-    "AT+HTTPDATA=" + String(json.length()) + ",10000";
-  String dataResp = sendAT(dataCmd, 5000);
-  if (dataResp.indexOf("DOWNLOAD") == -1) {
-    Serial.println("❌ HTTPDATA FAILED");
-    closeHttpSession();
-    uploadInProgress = false;
-    return false;
-  }
-  delay(100);
-  MODEM_UART.print(json);
-  // Wait for the modem to consume the payload. Polling for the echoed prompt
-  // response is far quicker than a fixed sleep, but fall back to a short grace
-  // period so a silent modem cannot stall the cycle.
-  unsigned long sentAt = millis();
-  while (millis() - sentAt < 400 && MODEM_UART.available()) {
-    MODEM_UART.read();
-  }
-  delay(150);
-  MODEM_UART.println();
-  MODEM_UART.println("AT+HTTPACTION=1");
-  String actionResult = "";
-  bool success = false;
-  unsigned long startWait = millis();
-  while (millis() - startWait < 5000) {
-    while (MODEM_UART.available()) {
-      char c = MODEM_UART.read();
-      actionResult += c;
-      if (actionResult.indexOf(",200,") != -1 ||
-          actionResult.indexOf(",201,") != -1) {
-        success = true;
-        break;
-      }
-      if (actionResult.indexOf(",40") != -1 ||
-          actionResult.indexOf(",50") != -1) {
-        break;
-      }
-    }
-    if (success) break;
-  }
-  if (success && !timeSynced) {
+  if (!timeSynced) {
     syncTimeFromServer();
   }
-  if (!success) {
-    // The error body lives in the session, so it has to be read BEFORE the
-    // session is terminated. Reading it afterwards always returns empty.
-    printHttpError();
-    closeHttpSession();
-  }
-  if (success) {
-    uploadFailCount = 0;
-    lastUploadTime = millis();
-    lastUploadedLat = latitude;
-    lastUploadedLon = longitude;
-    clearSerialBuffer();
-    uploadInProgress = false;
-    return true;
-  }
-  Serial.println("❌ FIREBASE FAILED");
+  uploadFailCount = 0;
+  lastUploadTime = millis();
+  lastUploadedLat = s.lat;
+  lastUploadedLon = s.lon;
+  clearSerialBuffer();
   uploadInProgress = false;
-  return false;
+  return true;
 }
 bool uploadLapTime(int n, unsigned long ms) {
   String body = String((float)ms / 1000.0, 2);
   String url = String(FIREBASE_DB) + FIREBASE_RACE_PATH +
     "lap" + String(n) + ".json?auth=" +
     FIREBASE_SECRET + "&x-http-method-override=PUT";
-  if (!openHttpSession()) {
-    Serial.println("❌ LAP TIME: HTTPINIT FAILED");
+  if (!httpPutJson(url, body, 5000)) {
+    Serial.println("❌ LAP TIME FAILED");
     return false;
   }
-  sendAT("AT+HTTPPARA=\"URL\",\"" + url + "\"", 5000);
-  sendAT("AT+HTTPPARA=\"CONTENT\",\"application/json\"", 3000);
-  String dataResp = sendAT(
-    "AT+HTTPDATA=" + String(body.length()) + ",10000", 5000
-  );
-  if (dataResp.indexOf("DOWNLOAD") == -1) {
-    Serial.println("❌ LAP TIME: HTTPDATA FAILED");
-    closeHttpSession();
-    return false;
-  }
-  delay(100);
-  MODEM_UART.print(body);
-  unsigned long sentLap = millis();
-  while (millis() - sentLap < 400 && MODEM_UART.available()) {
-    MODEM_UART.read();
-  }
-  delay(150);
-  MODEM_UART.println();
-  // No drain here: the payload was just written, so anything pending is its
-  // echo. Draining first would risk discarding the tail of the body.
-  MODEM_UART.println("AT+HTTPACTION=1");
-  unsigned long waitStart = millis();
-  String actionResult = "";
-  bool ok = false;
-  while (millis() - waitStart < 5000) {
-    while (MODEM_UART.available()) {
-      char c = MODEM_UART.read();
-      actionResult += c;
-      if (actionResult.indexOf(",200,") != -1) { ok = true; break; }
-      if (actionResult.indexOf(",40") != -1 || actionResult.indexOf(",50") != -1) break;
-    }
-    if (ok) break;
-  }
-  if (!ok) {
-    // Read the failure reason while the session is still open, otherwise the
-    // body is discarded and an unsaveable lap can never be diagnosed.
-    printHttpError();
-    closeHttpSession();
-  }
-  Serial.println(ok ? "✅ LAP TIME SAVED" : "❌ LAP TIME FAILED");
-  return ok;
+  Serial.println("✅ LAP TIME SAVED");
+  return true;
 }
 void setup() {
   Serial.begin(115200);
@@ -983,11 +1033,31 @@ void printTelemetry(float lat, float lon, bool freshFix, bool netUp,
   else {
     Serial.println("  |  FIREBASE FAIL (buffered " + String(trackCount) + ")");
   }
+  // Only shouted about when something was actually lost, so the steady-state
+  // line stays short. histDropped is the count of samples that never reached
+  // /history because the buffer was full during an outage.
+  if (histDropped) {
+    Serial.print("  |  HIST LOST " + String(histDropped) + " (type 'h')");
+  }
+}
+
+// Report the history buffer, so "the database only kept the last value" can be
+// diagnosed from the field without reading modem traffic.
+void printHistoryStatus() {
+  Serial.println("──── HISTORY ────");
+  Serial.println("  path     : " + String(FIREBASE_HISTORY_PATH));
+  Serial.println("  buffered : " + String(histCount) + " / " + String(HISTORY_BATCH));
+  Serial.println("  seq      : " + String(histSeq) + " (next sample key)");
+  Serial.println("  batch    : h" + String(histBatchSeq) + " of " + String(HISTORY_BATCHES));
+  Serial.println("  retained : ~" + String((unsigned long)HISTORY_BATCH * HISTORY_BATCHES) +
+                 " samples in the database");
+  Serial.println("  dropped  : " + String(histDropped) + " samples lost while the buffer was full");
+  Serial.println("───────────────────");
 }
 
 // Diagnostics are on demand rather than automatic: the terminal stays clean
 // unless a human asks for detail. Type 'b' in the monitor for the ADC sweep,
-// 'g' for the GNSS engine state.
+// 'g' for the GNSS engine state, 'h' for the history buffer.
 void handleSerialCommands() {
   while (Serial.available() > 0) {
     char c = Serial.read();
@@ -998,6 +1068,10 @@ void handleSerialCommands() {
     if (c == 'g' || c == 'G') {
       Serial.println();
       diagnoseGnss();
+    }
+    if (c == 'h' || c == 'H') {
+      Serial.println();
+      printHistoryStatus();
     }
   }
 }
@@ -1145,9 +1219,13 @@ void loop() {
     fetchStartPoint();
   }
   int completedLap = checkLapZone(latitude, longitude);
+  // Snapshot everything this cycle reports, after the lap zone has been updated
+  // so the live node and the history record agree about the same instant.
+  HistSample sample;
+  captureSample(sample, latitude, longitude);
   bool success = false;
   if (networkUp) {
-    success = uploadToFirebase(latitude, longitude);
+    success = uploadToFirebase(sample);
     if (!success) {
       uploadFailCount++;
       // A single blip is usually a transient cell failure: just retry. Only tear
@@ -1158,7 +1236,7 @@ void loop() {
         uploadFailCount = 0;
         recoverInternet();
       }
-      success = uploadToFirebase(latitude, longitude);
+      success = uploadToFirebase(sample);
     }
   }
   // Printed after the upload so the result is known. One line per cycle is the
@@ -1168,6 +1246,10 @@ void loop() {
   // Whatever happened, keep this position. If it never reached Firebase it has
   // to be replayed later or the driven path is lost for the outage window.
   if (!success) serviceTrackQueue(latitude, longitude);
+  // Record the sample for the history batches whether or not the live write
+  // landed. This is the write that adds instead of replacing, so it is the one
+  // that leaves a record of the whole route behind.
+  pushHistorySample(sample);
   if (completedLap > 0 && lastLapMs > 0) {
     // Park it in the pending slot instead of posting once and hoping. A failure
     // now costs one missed cycle rather than the whole lap.
@@ -1178,6 +1260,9 @@ void loop() {
   servicePendingLap();
   // Only replay buffered positions once the link is genuinely working again.
   if (success) serviceTrackFlush();
+  // Lowest priority. A history batch is whole even if it waits another cycle, so
+  // it goes last and must never delay the live feed.
+  serviceHistory();
   // Pace the next cycle to 1 Hz. The blocking AT calls above determine the
   // real floor, so if a cycle overran, this returns immediately.
   unsigned long spent = millis() - cycleStarted;
