@@ -1,0 +1,15 @@
+{
+  "rules": {
+    "zion": {
+      "$kart": {
+        ".read": "auth != null",
+        "live":       { ".write": false },
+        "track":      { ".write": false },
+        "startPoint": { ".write": "auth != null" },
+        "race":       { ".write": "auth != null" },
+        "session":    { ".write": "auth != null" },
+        "sessions":   { ".write": "auth != null" }
+      }
+    }
+  }
+}
